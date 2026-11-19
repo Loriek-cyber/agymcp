@@ -1,4 +1,4 @@
-"""Core configuration and HTTP probe engine for agymcp."""
+"""Core configuration and Claude Code-compatible MCP handshake engine for agymcp."""
 
 from __future__ import annotations
 
@@ -12,9 +12,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 DEFAULT_CONFIG_PATH = Path.home() / ".gemini" / "config" / "mcp_config.json"
+
+MCP_PROTOCOL_VERSION = "2025-03-26"
+CLAUDE_CODE_USER_AGENT = "claude-code/2.1.0"
+CLAUDE_CODE_CLIENT_INFO = {
+    "name": "claude-code",
+    "version": "2.1.0",
+}
 
 _GENERIC_SUBDOMAINS = {"api", "mcp", "www", "server", "connect", "app"}
 _COMMON_TLDS = {
@@ -71,6 +78,12 @@ def normalize_url(url: str) -> str:
     return cleaned
 
 
+def sanitize_server_name(raw_name: str) -> str:
+    """Sanitize a server identifier into a clean lowercase slug."""
+    candidate = re.sub(r"[^a-z0-9_-]+", "-", raw_name.strip().lower()).strip("-_")
+    return candidate
+
+
 def infer_server_name(url: str) -> str:
     """Infer a clean Antigravity server identifier from an MCP URL."""
     cleaned = url.strip()
@@ -108,8 +121,7 @@ def infer_server_name(url: str) -> str:
     while len(parts) > 1 and parts[0] in _GENERIC_SUBDOMAINS:
         parts = parts[1:]
 
-    candidate = "-".join(parts)
-    candidate = re.sub(r"[^a-z0-9_-]+", "-", candidate).strip("-_")
+    candidate = sanitize_server_name("-".join(parts))
     return candidate or "mcp-server"
 
 
@@ -163,94 +175,310 @@ def parse_env_text(raw_text: str) -> dict[str, str]:
     return env
 
 
+def _parse_mcp_jsonrpc_body(body: bytes, content_type: str = "") -> dict[str, Any] | None:
+    """Parse a JSON-RPC payload returned either as application/json or text/event-stream."""
+    text = body.decode("utf-8", errors="replace").strip()
+    if not text:
+        return None
+
+    # Standard JSON response
+    if "text/event-stream" not in content_type.lower():
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and ("result" in item or "error" in item):
+                        return item
+        except json.JSONDecodeError:
+            pass
+
+    # Streamable HTTP SSE frame(s): extract JSON from `data:` lines
+    data_chunks: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            payload_str = line[5:].strip()
+            if payload_str and payload_str != "[DONE]":
+                data_chunks.append(payload_str)
+                try:
+                    parsed = json.loads(payload_str)
+                    if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
+                        return parsed
+                except json.JSONDecodeError:
+                    continue
+
+    if data_chunks:
+        try:
+            parsed = json.loads("\n".join(data_chunks))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def _discover_oauth_support(
+    url: str,
+    www_authenticate: str,
+    timeout: float = 4.0,
+) -> tuple[bool, str]:
+    """Check WWW-Authenticate and RFC 9728/8414 well-known endpoints for OAuth support."""
+    candidates: list[str] = []
+    if www_authenticate:
+        match = re.search(r'resource_metadata="([^"]+)"', www_authenticate)
+        if match:
+            candidates.append(match.group(1))
+
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path_suffix = parsed.path.rstrip("/")
+    if path_suffix:
+        candidates.append(f"{origin}/.well-known/oauth-protected-resource{path_suffix}")
+    candidates.append(f"{origin}/.well-known/oauth-protected-resource")
+    candidates.append(f"{origin}/.well-known/oauth-authorization-server")
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        full_url = urljoin(origin, candidate)
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        req = urllib.request.Request(
+            full_url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": CLAUDE_CODE_USER_AGENT,
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if 200 <= getattr(resp, "status", 200) < 300:
+                    meta = json.loads(resp.read().decode("utf-8", errors="replace"))
+                    if isinstance(meta, dict) and (
+                        "authorization_servers" in meta
+                        or "authorization_endpoint" in meta
+                        or "token_endpoint" in meta
+                        or "resource" in meta
+                    ):
+                        auth_servers = meta.get("authorization_servers")
+                        issuer = (
+                            str(auth_servers[0])
+                            if isinstance(auth_servers, list) and auth_servers
+                            else str(meta.get("issuer") or meta.get("authorization_endpoint") or "")
+                        )
+                        return True, issuer
+        except Exception:  # noqa: BLE001
+            continue
+
+    if www_authenticate and "bearer" in www_authenticate.lower() and "resource_metadata" in www_authenticate.lower():
+        return True, ""
+    return False, ""
+
+
+def _post_jsonrpc(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    timeout: float,
+) -> tuple[int, dict[str, str], bytes]:
+    """Send a JSON-RPC POST request impersonating Claude Code."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        status = getattr(resp, "status", 200)
+        resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+        body = resp.read(256 * 1024)
+        return status, resp_headers, body
+
+
 def probe_mcp_url(
     url: str,
     headers: dict[str, str] | None = None,
-    timeout: float = 5.0,
+    timeout: float = 6.0,
 ) -> dict[str, Any]:
-    """Probe an MCP HTTP endpoint to check reachability and auth/transport hints."""
+    """Perform a real MCP Streamable HTTP handshake impersonating Claude Code.
+
+    Sends JSON-RPC `initialize` (with Claude Code clientInfo & User-Agent),
+    follows up with `notifications/initialized` + `tools/list` when authorized,
+    and checks OAuth discovery metadata on HTTP 401/403.
+    """
+    base_result: dict[str, Any] = {
+        "reachable": False,
+        "status_code": None,
+        "transport": "unknown",
+        "needs_auth": False,
+        "auth_type": "none",
+        "is_legacy_sse": False,
+        "server_name": "",
+        "server_version": "",
+        "suggested_name": "",
+        "tools_count": None,
+        "tools_preview": [],
+        "message": "",
+    }
+
     try:
         norm_url = normalize_url(url)
     except ValueError as exc:
-        return {
-            "reachable": False,
-            "status_code": None,
-            "needs_auth": False,
-            "is_legacy_sse": False,
-            "message": str(exc),
-        }
+        base_result["message"] = str(exc)
+        return base_result
 
     legacy_sse = is_sse_url(norm_url)
+    base_result["is_legacy_sse"] = legacy_sse
+
     req_headers = {
+        "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
-        "User-Agent": "agymcp/0.1.0",
+        "User-Agent": CLAUDE_CODE_USER_AGENT,
+        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
     }
     if headers:
         req_headers.update(headers)
 
-    request = urllib.request.Request(norm_url, headers=req_headers, method="GET")
+    init_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {
+                "roots": {"listChanged": True},
+                "sampling": {},
+            },
+            "clientInfo": CLAUDE_CODE_CLIENT_INFO,
+        },
+    }
+
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:
-            code = getattr(resp, "status", 200)
-            msg = f"Endpoint raggiungibile (HTTP {code})."
-            if legacy_sse:
-                msg += " Rilevato percorso /sse: consigliato bridge npx mcp-remote."
-            return {
-                "reachable": True,
-                "status_code": code,
-                "needs_auth": False,
-                "is_legacy_sse": legacy_sse,
-                "message": msg,
-            }
+        status, resp_headers, body = _post_jsonrpc(
+            norm_url, init_payload, req_headers, timeout=timeout
+        )
+        base_result["reachable"] = True
+        base_result["status_code"] = status
+        base_result["transport"] = "legacy-sse" if legacy_sse else "streamable-http"
+
+        rpc = _parse_mcp_jsonrpc_body(body, resp_headers.get("content-type", ""))
+        result_obj = rpc.get("result") if isinstance(rpc, dict) else None
+        if isinstance(result_obj, dict):
+            srv_info = result_obj.get("serverInfo")
+            if isinstance(srv_info, dict):
+                srv_name = str(srv_info.get("name") or "").strip()
+                srv_ver = str(srv_info.get("version") or "").strip()
+                base_result["server_name"] = srv_name
+                base_result["server_version"] = srv_ver
+                base_result["suggested_name"] = sanitize_server_name(srv_name)
+
+            # Follow-up: notifications/initialized + tools/list
+            session_id = resp_headers.get("mcp-session-id")
+            followup_headers = dict(req_headers)
+            if session_id:
+                followup_headers["Mcp-Session-Id"] = session_id
+
+            try:
+                _post_jsonrpc(
+                    norm_url,
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    followup_headers,
+                    timeout=min(timeout, 3.0),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            try:
+                _, t_headers, t_body = _post_jsonrpc(
+                    norm_url,
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                    followup_headers,
+                    timeout=min(timeout, 4.0),
+                )
+                t_rpc = _parse_mcp_jsonrpc_body(t_body, t_headers.get("content-type", ""))
+                t_res = t_rpc.get("result") if isinstance(t_rpc, dict) else None
+                if isinstance(t_res, dict) and isinstance(t_res.get("tools"), list):
+                    tools_list = t_res["tools"]
+                    base_result["tools_count"] = len(tools_list)
+                    base_result["tools_preview"] = [
+                        str(t.get("name"))
+                        for t in tools_list[:5]
+                        if isinstance(t, dict) and t.get("name")
+                    ]
+            except Exception:  # noqa: BLE001
+                pass
+
+        parts: list[str] = []
+        if base_result["server_name"]:
+            label = base_result["server_name"]
+            if base_result["server_version"]:
+                label += f" v{base_result['server_version']}"
+            parts.append(label)
+        else:
+            parts.append(f"MCP attivo (HTTP {status})")
+
+        parts.append("streamable-http")
+        if base_result["tools_count"] is not None:
+            parts.append(f"{base_result['tools_count']} tools")
+        base_result["message"] = " · ".join(parts)
+        return base_result
+
     except urllib.error.HTTPError as exc:
         code = exc.code
+        base_result["status_code"] = code
+        www_auth = exc.headers.get("WWW-Authenticate", "") if exc.headers else ""
+        exc.close()
+
         if code in (401, 403):
-            msg = (
-                f"Endpoint attivo (HTTP {code}): richiede autenticazione "
-                "(OAuth in Antigravity o Bearer/API Key)."
+            base_result["reachable"] = True
+            base_result["needs_auth"] = True
+            base_result["transport"] = "legacy-sse" if legacy_sse else "streamable-http"
+            is_oauth, _issuer = _discover_oauth_support(
+                norm_url, www_auth, timeout=min(timeout, 4.0)
             )
-            return {
-                "reachable": True,
-                "status_code": code,
-                "needs_auth": True,
-                "is_legacy_sse": legacy_sse,
-                "message": msg,
-            }
+            if is_oauth:
+                base_result["auth_type"] = "oauth"
+                base_result["message"] = (
+                    f"OAuth rilevato (HTTP {code}) · Antigravity gestirà il login automaticamente"
+                )
+            else:
+                base_result["auth_type"] = "token"
+                base_result["message"] = (
+                    f"Autenticazione richiesta (HTTP {code}) · inserisci Bearer Token o API Key"
+                )
+            return base_result
+
+        if code == 405 and legacy_sse:
+            base_result["reachable"] = True
+            base_result["transport"] = "legacy-sse"
+            base_result["is_legacy_sse"] = True
+            base_result["message"] = (
+                "Endpoint legacy SSE rilevato · attiva il bridge npx mcp-remote"
+            )
+            return base_result
+
         if code in (400, 405, 406, 415, 422):
-            msg = (
-                f"Endpoint MCP attivo (HTTP {code} su GET: accetta richieste "
-                "Streamable HTTP POST JSON-RPC)."
-            )
-            return {
-                "reachable": True,
-                "status_code": code,
-                "needs_auth": False,
-                "is_legacy_sse": legacy_sse,
-                "message": msg,
-            }
+            # Some servers expect GET /sse for legacy SSE; check if path or response hints SSE
+            base_result["reachable"] = True
+            base_result["transport"] = "legacy-sse" if legacy_sse else "streamable-http"
+            base_result["message"] = f"Endpoint raggiungibile (HTTP {code})"
+            return base_result
+
         if code == 404:
-            return {
-                "reachable": False,
-                "status_code": 404,
-                "needs_auth": False,
-                "is_legacy_sse": legacy_sse,
-                "message": "Endpoint non trovato (HTTP 404). Controlla il percorso del link.",
-            }
-        return {
-            "reachable": True,
-            "status_code": code,
-            "needs_auth": False,
-            "is_legacy_sse": legacy_sse,
-            "message": f"Il server ha risposto con HTTP {code}.",
-        }
+            base_result["reachable"] = False
+            base_result["message"] = "Endpoint non trovato (HTTP 404) · verifica il percorso"
+            return base_result
+
+        base_result["reachable"] = True
+        base_result["message"] = f"Risposta server HTTP {code}"
+        return base_result
+
     except Exception as exc:  # noqa: BLE001
-        return {
-            "reachable": False,
-            "status_code": None,
-            "needs_auth": False,
-            "is_legacy_sse": legacy_sse,
-            "message": f"Connessione fallita: {exc}",
-        }
+        base_result["reachable"] = False
+        base_result["message"] = f"Connessione fallita · {exc}"
+        return base_result
 
 
 class MCPConfigManager:
@@ -379,7 +607,7 @@ class MCPConfigManager:
         header_flags = args.count("--header")
         if header_flags:
             notes.append(f"{header_flags} header")
-        return f" [{', '.join(notes)}]" if notes else ""
+        return f" · {', '.join(notes)}" if notes else ""
 
     def add_remote_server(
         self,

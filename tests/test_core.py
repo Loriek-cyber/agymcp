@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 import contextlib
+import http.server
 import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
 from agymcp.cli import main as cli_main
 from agymcp.core import (
+    CLAUDE_CODE_USER_AGENT,
     MCPConfigManager,
     infer_server_name,
     is_sse_url,
     normalize_url,
     parse_env_text,
     parse_headers_text,
+    probe_mcp_url,
 )
 
 
@@ -211,7 +215,11 @@ class TestCLIAndOffscreenGUI(unittest.TestCase):
 
         app = QApplication.instance() or QApplication([])
         manager = MCPConfigManager(self.cfg_path)
-        window = MainWindow(manager=manager, check_updates_on_start=False)
+        window = MainWindow(
+            manager=manager,
+            check_updates_on_start=False,
+            auto_probe_on_change=False,
+        )
 
         window.url_input.setText("https://example.com/sse")
         self.assertTrue(window.bridge_checkbox.isChecked())
@@ -226,9 +234,132 @@ class TestCLIAndOffscreenGUI(unittest.TestCase):
         servers = manager.get_servers()
         self.assertIn("streak", servers)
         self.assertEqual(servers["streak"]["serverUrl"], "https://api.streak.com/mcp")
-        self.assertEqual(window.table.rowCount(), 1)
+        self.assertEqual(len(window.server_rows), 1)
         window.close()
         app.processEvents()
+
+
+class _FakeMCPHandler(http.server.BaseHTTPRequestHandler):
+    seen_user_agents: list[str] = []
+    seen_client_names: list[str] = []
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        return
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/.well-known/oauth-protected-resource"):
+            body = json.dumps(
+                {
+                    "resource": "http://127.0.0.1/oauth-mcp",
+                    "authorization_servers": ["https://auth.example.com"],
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.seen_user_agents.append(self.headers.get("User-Agent", ""))
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length)
+        payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+        if self.path == "/oauth-mcp":
+            self.send_response(401)
+            self.send_header(
+                "WWW-Authenticate",
+                'Bearer resource_metadata="/.well-known/oauth-protected-resource"',
+            )
+            self.end_headers()
+            return
+
+        if self.path == "/mcp":
+            method = payload.get("method")
+            if method == "initialize":
+                client_name = payload.get("params", {}).get("clientInfo", {}).get("name", "")
+                self.seen_client_names.append(client_name)
+                rpc_resp = {
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id", 1),
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "Streak MCP", "version": "1.4.0"},
+                    },
+                }
+                sse_body = f"event: message\ndata: {json.dumps(rpc_resp)}\n\n".encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Mcp-Session-Id", "sess-123")
+                self.send_header("Content-Length", str(len(sse_body)))
+                self.end_headers()
+                self.wfile.write(sse_body)
+                return
+
+            if method == "notifications/initialized":
+                self.send_response(202)
+                self.end_headers()
+                return
+
+            if method == "tools/list":
+                rpc_resp = {
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id", 2),
+                    "result": {
+                        "tools": [
+                            {"name": "list_pipelines"},
+                            {"name": "create_box"},
+                        ]
+                    },
+                }
+                body = json.dumps(rpc_resp).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+        self.send_response(404)
+        self.end_headers()
+
+
+class TestClaudeCodeHandshake(unittest.TestCase):
+    def setUp(self) -> None:
+        _FakeMCPHandler.seen_user_agents.clear()
+        _FakeMCPHandler.seen_client_names.clear()
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FakeMCPHandler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+    def test_claude_code_handshake_and_tools_discovery(self) -> None:
+        res = probe_mcp_url(f"http://127.0.0.1:{self.port}/mcp")
+        self.assertTrue(res["reachable"])
+        self.assertEqual(res["transport"], "streamable-http")
+        self.assertEqual(res["server_name"], "Streak MCP")
+        self.assertEqual(res["server_version"], "1.4.0")
+        self.assertEqual(res["suggested_name"], "streak-mcp")
+        self.assertEqual(res["tools_count"], 2)
+        self.assertEqual(res["tools_preview"], ["list_pipelines", "create_box"])
+        self.assertIn(CLAUDE_CODE_USER_AGENT, _FakeMCPHandler.seen_user_agents)
+        self.assertIn("claude-code", _FakeMCPHandler.seen_client_names)
+
+    def test_oauth_discovery_on_401(self) -> None:
+        res = probe_mcp_url(f"http://127.0.0.1:{self.port}/oauth-mcp")
+        self.assertTrue(res["reachable"])
+        self.assertTrue(res["needs_auth"])
+        self.assertEqual(res["auth_type"], "oauth")
+        self.assertEqual(res["status_code"], 401)
 
 
 if __name__ == "__main__":

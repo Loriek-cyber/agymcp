@@ -1,4 +1,4 @@
-"""Native PyQt6 desktop interface for agymcp."""
+"""Native PyQt6 desktop interface for agymcp — Dark Mode Anti-AI Slop Design System."""
 
 from __future__ import annotations
 
@@ -9,30 +9,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -56,33 +51,258 @@ from agymcp.updater import (
     save_settings,
 )
 
+# Design System Palette (Pure Neutral Carbon Grays — Zero Blue-Slate, Zero Gradients)
+COLOR_CANVAS = "#09090B"
+COLOR_SURFACE = "#121214"
+COLOR_ELEVATED = "#1A1A1E"
+COLOR_BORDER = "#222226"
+COLOR_DIVIDER = "#1F1F23"
+COLOR_TEXT_PRIMARY = "#EDEDEF"
+COLOR_TEXT_SECONDARY = "#8E8E93"
+COLOR_TEXT_MUTED = "#52525B"
+COLOR_DOT_OK = "#22C55E"
+COLOR_DOT_WARN = "#F59E0B"
+COLOR_DOT_ERR = "#EF4444"
+COLOR_DOT_IDLE = "#52525B"
 
-class UpdateCheckWorker(QThread):
-    """Background thread to check GitHub Releases for a newer agymcp version."""
+MONO_FONT_STACK = '"JetBrains Mono", "Geist Mono", "Fira Code", "DejaVu Sans Mono", monospace'
 
-    finished_check = pyqtSignal(object)
+APP_STYLESHEET = f"""
+QMainWindow, QDialog {{
+    background-color: {COLOR_CANVAS};
+    color: {COLOR_TEXT_PRIMARY};
+}}
+QWidget {{
+    color: {COLOR_TEXT_PRIMARY};
+    font-size: 13px;
+}}
+QScrollArea {{
+    background-color: {COLOR_CANVAS};
+    border: none;
+}}
+QScrollArea > QWidget > QWidget {{
+    background-color: {COLOR_CANVAS};
+}}
+QScrollBar:vertical {{
+    background: {COLOR_CANVAS};
+    width: 8px;
+    margin: 0px;
+}}
+QScrollBar::handle:vertical {{
+    background: {COLOR_BORDER};
+    border-radius: 4px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {COLOR_TEXT_MUTED};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
 
-    def run(self) -> None:
-        self.finished_check.emit(check_for_updates())
+QFrame#Card {{
+    background-color: {COLOR_SURFACE};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 10px;
+}}
+QFrame#UpdateBanner {{
+    background-color: {COLOR_SURFACE};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 8px;
+}}
+QFrame#Divider {{
+    background-color: {COLOR_DIVIDER};
+    max-height: 1px;
+    min-height: 1px;
+    border: none;
+}}
+
+QLineEdit, QPlainTextEdit, QComboBox {{
+    background-color: {COLOR_CANVAS};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 6px;
+    padding: 8px 10px;
+    selection-background-color: {COLOR_ELEVATED};
+    selection-color: {COLOR_TEXT_PRIMARY};
+}}
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+    border: 1px solid {COLOR_TEXT_MUTED};
+}}
+QLineEdit::placeholder, QPlainTextEdit::placeholder {{
+    color: {COLOR_TEXT_MUTED};
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {COLOR_ELEVATED};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER};
+    selection-background-color: {COLOR_BORDER};
+    selection-color: {COLOR_TEXT_PRIMARY};
+    outline: none;
+}}
+
+QPushButton#PrimaryButton {{
+    background-color: {COLOR_TEXT_PRIMARY};
+    color: {COLOR_CANVAS};
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-weight: 600;
+}}
+QPushButton#PrimaryButton:hover {{
+    background-color: #D4D4D8;
+}}
+QPushButton#PrimaryButton:pressed {{
+    background-color: #A1A1AA;
+}}
+QPushButton#PrimaryButton:disabled {{
+    background-color: {COLOR_ELEVATED};
+    color: {COLOR_TEXT_MUTED};
+}}
+
+QPushButton#GhostButton {{
+    background-color: transparent;
+    color: {COLOR_TEXT_SECONDARY};
+    border: none;
+    border-radius: 6px;
+    padding: 6px 10px;
+}}
+QPushButton#GhostButton:hover {{
+    background-color: {COLOR_ELEVATED};
+    color: {COLOR_TEXT_PRIMARY};
+}}
+QPushButton#GhostButton:disabled {{
+    color: {COLOR_TEXT_MUTED};
+}}
+
+QPushButton#TabButton {{
+    background-color: transparent;
+    color: {COLOR_TEXT_SECONDARY};
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0px;
+    padding: 8px 4px;
+    font-weight: 500;
+}}
+QPushButton#TabButton:hover {{
+    color: {COLOR_TEXT_PRIMARY};
+}}
+QPushButton#TabButton[active="true"] {{
+    color: {COLOR_TEXT_PRIMARY};
+    border-bottom: 2px solid {COLOR_TEXT_PRIMARY};
+}}
+
+QPushButton#RowMenuButton {{
+    background-color: transparent;
+    color: {COLOR_TEXT_MUTED};
+    border: none;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-weight: 700;
+    font-size: 14px;
+}}
+QPushButton#RowMenuButton:hover {{
+    background-color: {COLOR_ELEVATED};
+    color: {COLOR_TEXT_PRIMARY};
+}}
+
+QFrame#ServerRow {{
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+}}
+QFrame#ServerRow:hover {{
+    background-color: {COLOR_ELEVATED};
+}}
+
+QCheckBox {{
+    color: {COLOR_TEXT_SECONDARY};
+    spacing: 8px;
+}}
+QCheckBox::indicator {{
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border: 1px solid {COLOR_BORDER};
+    background-color: {COLOR_CANVAS};
+}}
+QCheckBox::indicator:checked {{
+    background-color: {COLOR_TEXT_SECONDARY};
+    border: 3px solid {COLOR_CANVAS};
+}}
+
+QMenu {{
+    background-color: {COLOR_ELEVATED};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 6px;
+    padding: 4px;
+}}
+QMenu::item {{
+    padding: 6px 14px;
+    border-radius: 4px;
+}}
+QMenu::item:selected {{
+    background-color: {COLOR_BORDER};
+}}
+
+QMessageBox {{
+    background-color: {COLOR_SURFACE};
+}}
+QMessageBox QLabel {{
+    color: {COLOR_TEXT_PRIMARY};
+}}
+QMessageBox QPushButton {{
+    background-color: {COLOR_ELEVATED};
+    color: {COLOR_TEXT_PRIMARY};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 6px;
+    padding: 6px 14px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {COLOR_BORDER};
+}}
+"""
 
 
-class UpdateInstallWorker(QThread):
-    """Background thread to download and install an available agymcp release."""
+def _make_divider() -> QFrame:
+    div = QFrame()
+    div.setObjectName("Divider")
+    div.setFrameShape(QFrame.Shape.HLine)
+    return div
 
-    finished_install = pyqtSignal(object)
 
-    def __init__(self, info: UpdateInfo, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.info = info
+def _make_status_dot(color: str = COLOR_DOT_IDLE) -> QFrame:
+    dot = QFrame()
+    dot.setFixedSize(6, 6)
+    dot.setStyleSheet(f"background-color: {color}; border-radius: 3px; border: none;")
+    return dot
 
-    def run(self) -> None:
-        self.finished_install.emit(apply_update(self.info))
+
+def _apply_compact_heading(label: QLabel, point_size: int) -> None:
+    font = QFont()
+    font.setPointSize(point_size)
+    font.setWeight(QFont.Weight.DemiBold)
+    font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 98.0)
+    label.setFont(font)
+    label.setStyleSheet(f"color: {COLOR_TEXT_PRIMARY};")
+
+
+def _mono_font(point_size: int = 10) -> QFont:
+    font = QFont("JetBrains Mono")
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPointSize(point_size)
+    return font
 
 
 class ProbeWorker(QThread):
-    """Background thread to probe an MCP HTTP URL without freezing the UI."""
+    """Background thread running a Claude Code MCP handshake against a URL."""
 
-    finished_probe = pyqtSignal(dict)
+    finished_probe = pyqtSignal(str, dict)
 
     def __init__(
         self,
@@ -96,7 +316,29 @@ class ProbeWorker(QThread):
 
     def run(self) -> None:
         result = probe_mcp_url(self.url, headers=self.headers)
-        self.finished_probe.emit(result)
+        self.finished_probe.emit(self.url, result)
+
+
+class UpdateCheckWorker(QThread):
+    """Background thread checking GitHub Releases for a newer agymcp version."""
+
+    finished_check = pyqtSignal(object)
+
+    def run(self) -> None:
+        self.finished_check.emit(check_for_updates())
+
+
+class UpdateInstallWorker(QThread):
+    """Background thread downloading and installing an available agymcp release."""
+
+    finished_install = pyqtSignal(object)
+
+    def __init__(self, info: UpdateInfo, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.info = info
+
+    def run(self) -> None:
+        self.finished_install.emit(apply_update(self.info))
 
 
 def _extract_bridge_details(entry: dict[str, Any]) -> tuple[str, dict[str, str]]:
@@ -121,7 +363,7 @@ def _extract_bridge_details(entry: dict[str, Any]) -> tuple[str, dict[str, str]]
 
 
 class ServerEditDialog(QDialog):
-    """Modal dialog for creating or editing a Remote, Bridge, or Stdio MCP server."""
+    """Elevated modal dialog for creating or editing a Remote, Bridge, or Stdio server."""
 
     MODE_REMOTE = 0
     MODE_BRIDGE = 1
@@ -136,84 +378,118 @@ class ServerEditDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._is_edit = bool(name)
-        self.setWindowTitle(
-            f"Modifica server: {name}" if self._is_edit else "Aggiungi Server MCP"
-        )
+        self.setWindowTitle(f"Modifica {name}" if self._is_edit else "Nuovo server MCP")
         self.setMinimumWidth(520)
+        self.setStyleSheet(APP_STYLESHEET)
 
         layout = QVBoxLayout(self)
-        form_top = QFormLayout()
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
+        heading = QLabel(f"Modifica {name}" if self._is_edit else "Aggiungi server MCP")
+        _apply_compact_heading(heading, 14)
+        layout.addWidget(heading)
+        layout.addWidget(_make_divider())
+
+        lbl_name = QLabel("Identificativo")
+        lbl_name.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.name_input = QLineEdit(name)
-        self.name_input.setPlaceholderText("es. streak, postgres-local, github")
+        self.name_input.setFont(_mono_font(10))
+        self.name_input.setPlaceholderText("es. streak, postgres-local")
         if self._is_edit:
             self.name_input.setReadOnly(True)
-        form_top.addRow("Nome server:", self.name_input)
+        layout.addWidget(lbl_name)
+        layout.addWidget(self.name_input)
 
+        lbl_mode = QLabel("Trasporto")
+        lbl_mode.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(
             [
-                "HTTP Remoto (serverUrl)",
+                "Streamable HTTP (serverUrl)",
                 "Bridge Legacy SSE (npx -y mcp-remote)",
                 "Locale Stdio (command + args)",
             ]
         )
-        form_top.addRow("Tipo trasporto:", self.mode_combo)
-        layout.addLayout(form_top)
+        layout.addWidget(lbl_mode)
+        layout.addWidget(self.mode_combo)
 
         self.stack = QStackedWidget()
 
-        # Page 0: Remote / Bridge fields
+        # Page 0: Remote / Bridge
         remote_page = QWidget()
-        remote_form = QFormLayout(remote_page)
-        self.remote_url_input = QLineEdit()
-        self.remote_url_input.setPlaceholderText("https://api.streak.com/mcp")
-        remote_form.addRow("URL Endpoint:", self.remote_url_input)
+        remote_layout = QVBoxLayout(remote_page)
+        remote_layout.setContentsMargins(0, 4, 0, 0)
+        remote_layout.setSpacing(10)
 
+        lbl_url = QLabel("Endpoint URL")
+        lbl_url.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
+        self.remote_url_input = QLineEdit()
+        self.remote_url_input.setFont(_mono_font(10))
+        self.remote_url_input.setPlaceholderText("https://api.streak.com/mcp")
+        remote_layout.addWidget(lbl_url)
+        remote_layout.addWidget(self.remote_url_input)
+
+        lbl_hdr = QLabel("Headers HTTP (opzionale, Chiave: Valore per riga)")
+        lbl_hdr.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.remote_headers_input = QPlainTextEdit()
-        self.remote_headers_input.setPlaceholderText(
-            "Opzionale, un header per riga:\nAuthorization: Bearer tuo_token\nX-Api-Key: tua_chiave"
-        )
-        self.remote_headers_input.setFixedHeight(90)
-        remote_form.addRow("Headers HTTP:", self.remote_headers_input)
+        self.remote_headers_input.setFont(_mono_font(10))
+        self.remote_headers_input.setPlaceholderText("Authorization: Bearer ...")
+        self.remote_headers_input.setFixedHeight(84)
+        remote_layout.addWidget(lbl_hdr)
+        remote_layout.addWidget(self.remote_headers_input)
         self.stack.addWidget(remote_page)
 
-        # Page 1: Stdio fields
+        # Page 1: Stdio
         stdio_page = QWidget()
-        stdio_form = QFormLayout(stdio_page)
+        stdio_layout = QVBoxLayout(stdio_page)
+        stdio_layout.setContentsMargins(0, 4, 0, 0)
+        stdio_layout.setSpacing(10)
+
+        lbl_cmd = QLabel("Comando")
+        lbl_cmd.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.stdio_cmd_input = QLineEdit()
-        self.stdio_cmd_input.setPlaceholderText("es. uvx, npx, python3, /path/to/bin")
-        stdio_form.addRow("Comando:", self.stdio_cmd_input)
+        self.stdio_cmd_input.setFont(_mono_font(10))
+        self.stdio_cmd_input.setPlaceholderText("uvx, npx, python3")
+        stdio_layout.addWidget(lbl_cmd)
+        stdio_layout.addWidget(self.stdio_cmd_input)
 
+        lbl_args = QLabel("Argomenti (uno per riga o separati da spazio)")
+        lbl_args.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.stdio_args_input = QPlainTextEdit()
-        self.stdio_args_input.setPlaceholderText(
-            "Argomenti (uno per riga oppure separati da spazio se su una sola riga)"
-        )
-        self.stdio_args_input.setFixedHeight(85)
-        stdio_form.addRow("Argomenti:", self.stdio_args_input)
+        self.stdio_args_input.setFont(_mono_font(10))
+        self.stdio_args_input.setFixedHeight(74)
+        stdio_layout.addWidget(lbl_args)
+        stdio_layout.addWidget(self.stdio_args_input)
 
+        lbl_env = QLabel("Variabili ambiente (CHIAVE=VALORE per riga)")
+        lbl_env.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.stdio_env_input = QPlainTextEdit()
-        self.stdio_env_input.setPlaceholderText(
-            "Opzionale, una variabile per riga:\nAPI_KEY=valore"
-        )
-        self.stdio_env_input.setFixedHeight(80)
-        stdio_form.addRow("Variabili Env:", self.stdio_env_input)
+        self.stdio_env_input.setFont(_mono_font(10))
+        self.stdio_env_input.setFixedHeight(74)
+        stdio_layout.addWidget(lbl_env)
+        stdio_layout.addWidget(self.stdio_env_input)
         self.stack.addWidget(stdio_page)
 
         layout.addWidget(self.stack)
 
-        self.enabled_checkbox = QCheckBox("Server attivo (abilitato in Antigravity)")
+        self.enabled_checkbox = QCheckBox("Attivo in Antigravity")
         self.enabled_checkbox.setChecked(True)
         layout.addWidget(self.enabled_checkbox)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.button(QDialogButtonBox.StandardButton.Save).setText("Salva")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Annulla")
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        layout.addWidget(_make_divider())
+
+        actions_row = QHBoxLayout()
+        actions_row.addStretch(1)
+        cancel_btn = QPushButton("Annulla")
+        cancel_btn.setObjectName("GhostButton")
+        save_btn = QPushButton("Salva")
+        save_btn.setObjectName("PrimaryButton")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn.clicked.connect(self._on_accept)
+        actions_row.addWidget(cancel_btn)
+        actions_row.addWidget(save_btn)
+        layout.addLayout(actions_row)
 
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
@@ -226,19 +502,14 @@ class ServerEditDialog(QDialog):
         self._result: tuple[str, dict[str, Any]] | None = None
 
     def _on_mode_changed(self, index: int) -> None:
-        if index in (self.MODE_REMOTE, self.MODE_BRIDGE):
-            self.stack.setCurrentIndex(0)
-        else:
-            self.stack.setCurrentIndex(1)
+        self.stack.setCurrentIndex(0 if index in (self.MODE_REMOTE, self.MODE_BRIDGE) else 1)
 
     def _populate_from_entry(self, entry: dict[str, Any]) -> None:
         self.enabled_checkbox.setChecked(not bool(entry.get("disabled", False)))
         kind = MCPConfigManager.classify_server(entry)
         if kind == "remote":
             self.mode_combo.setCurrentIndex(self.MODE_REMOTE)
-            self.remote_url_input.setText(
-                str(entry.get("serverUrl") or entry.get("url") or "")
-            )
+            self.remote_url_input.setText(str(entry.get("serverUrl") or entry.get("url") or ""))
             headers = entry.get("headers") or {}
             if isinstance(headers, dict) and headers:
                 self.remote_headers_input.setPlainText(
@@ -302,7 +573,7 @@ class ServerEditDialog(QDialog):
             else:
                 cmd = self.stdio_cmd_input.text().strip()
                 if not cmd:
-                    raise ValueError("Inserisci il comando eseguibile (es. uvx, npx).")
+                    raise ValueError("Inserisci il comando eseguibile.")
                 args = self._parse_args()
                 env = parse_env_text(self.stdio_env_input.toPlainText())
                 entry = {"command": cmd, "args": args, "disabled": disabled}
@@ -316,272 +587,351 @@ class ServerEditDialog(QDialog):
         self.accept()
 
     def get_result(self) -> tuple[str, dict[str, Any]] | None:
-        """Return (name, entry_dict) if the dialog was accepted."""
+        """Return (name, entry_dict) if accepted."""
         return self._result
 
 
 class MainWindow(QMainWindow):
-    """Main desktop window for Antigravity MCP installation and management."""
+    """Centered Linear/Vercel-style dark desktop window for agymcp."""
 
     def __init__(
         self,
         manager: MCPConfigManager | None = None,
         initial_url: str = "",
         check_updates_on_start: bool = True,
+        auto_probe_on_change: bool = True,
     ) -> None:
         super().__init__()
         self.manager = manager or MCPConfigManager()
         self._name_manually_edited = False
+        self._auto_probe_on_change = auto_probe_on_change
         self._probe_worker: ProbeWorker | None = None
         self._update_check_worker: UpdateCheckWorker | None = None
         self._update_install_worker: UpdateInstallWorker | None = None
         self._pending_update: UpdateInfo | None = None
+        self._manual_update_check = False
         self._settings = load_settings()
+        self.server_rows: list[QWidget] = []
 
-        self.setWindowTitle(f"Antigravity MCP Installer — agymcp v{__version__}")
-        self.setMinimumSize(820, 640)
+        self._probe_timer = QTimer(self)
+        self._probe_timer.setSingleShot(True)
+        self._probe_timer.setInterval(600)
+        self._probe_timer.timeout.connect(self._auto_probe_current_url)
+
+        self.setWindowTitle(f"agymcp · v{__version__}")
+        self.setMinimumSize(940, 720)
+        self.setStyleSheet(APP_STYLESHEET)
+
         icon_path = Path(__file__).resolve().parent.parent / "assets" / "agymcp.svg"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(16, 16, 16, 16)
-        root_layout.setSpacing(12)
+        # Spacious #09090B Canvas with centered max-width container (~30-35% breathing room)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.setCentralWidget(scroll)
 
-        # Header with version & update controls
+        canvas = QWidget()
+        canvas_layout = QHBoxLayout(canvas)
+        canvas_layout.setContentsMargins(48, 40, 48, 48)
+        canvas_layout.addStretch(1)
+
+        container = QWidget()
+        container.setMaximumWidth(740)
+        container.setMinimumWidth(640)
+        root_layout = QVBoxLayout(container)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ── Header ──────────────────────────────────────────────────────────
         header_row = QHBoxLayout()
-        title_label = QLabel(f"Antigravity MCP Installer  (v{__version__})")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        header_row.addWidget(title_label)
+        header_row.setSpacing(12)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title_line = QHBoxLayout()
+        title_line.setSpacing(10)
+
+        title_label = QLabel("agymcp")
+        _apply_compact_heading(title_label, 18)
+        version_label = QLabel(f"v{__version__}")
+        version_label.setFont(_mono_font(10))
+        version_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+        title_line.addWidget(title_label)
+        title_line.addWidget(version_label)
+        title_line.addStretch(1)
+
+        subtitle_label = QLabel("Antigravity MCP Installer & Manager")
+        subtitle_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 13px;")
+
+        title_col.addLayout(title_line)
+        title_col.addWidget(subtitle_label)
+        header_row.addLayout(title_col)
         header_row.addStretch(1)
 
         self.auto_update_checkbox = QCheckBox("Auto-aggiorna")
         self.auto_update_checkbox.setChecked(bool(self._settings.get("auto_update", True)))
-        self.auto_update_checkbox.setToolTip(
-            "Se attivo, scarica e installa automaticamente ogni nuova release di agymcp all'avvio."
-        )
-        self.check_update_btn = QPushButton("Controlla aggiornamenti")
+        self.check_update_btn = QPushButton("Aggiornamenti")
+        self.check_update_btn.setObjectName("GhostButton")
+
         header_row.addWidget(self.auto_update_checkbox)
         header_row.addWidget(self.check_update_btn)
         root_layout.addLayout(header_row)
 
-        # Collapsible Update Banner (visible when an update is detected/installing/installed)
+        # Optional minimal Update Banner
         self.update_banner = QFrame()
-        self.update_banner.setFrameShape(QFrame.Shape.StyledPanel)
-        self.update_banner.setStyleSheet(
-            "QFrame { background-color: #1e3a8a; border-radius: 6px; padding: 6px; }"
-            "QLabel { color: #f8fafc; font-weight: 500; }"
-        )
+        self.update_banner.setObjectName("UpdateBanner")
         self.update_banner.setVisible(False)
         banner_layout = QHBoxLayout(self.update_banner)
-        banner_layout.setContentsMargins(10, 6, 10, 6)
+        banner_layout.setContentsMargins(16, 12, 16, 12)
+        banner_layout.setSpacing(10)
+
+        self.update_dot = _make_status_dot(COLOR_DOT_OK)
         self.update_banner_label = QLabel("")
+        self.update_banner_label.setFont(_mono_font(10))
+        self.update_banner_label.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
         self.update_banner_label.setWordWrap(True)
-        self.update_now_btn = QPushButton("Aggiorna ora")
+
+        self.update_now_btn = QPushButton("Aggiorna")
+        self.update_now_btn.setObjectName("GhostButton")
         self.update_now_btn.setVisible(False)
-        self.restart_app_btn = QPushButton("Riavvia agymcp")
+        self.restart_app_btn = QPushButton("Riavvia")
+        self.restart_app_btn.setObjectName("GhostButton")
         self.restart_app_btn.setVisible(False)
+
+        banner_layout.addWidget(self.update_dot)
         banner_layout.addWidget(self.update_banner_label, stretch=1)
         banner_layout.addWidget(self.update_now_btn)
         banner_layout.addWidget(self.restart_app_btn)
+
+        root_layout.addSpacing(20)
         root_layout.addWidget(self.update_banner)
+        root_layout.addSpacing(28)
 
-        subtitle_label = QLabel(
-            "Incolla il link di un server MCP remoto (es. https://api.streak.com/mcp) "
-            "per aggiungerlo subito ad Antigravity."
-        )
-        subtitle_label.setWordWrap(True)
-        root_layout.addWidget(subtitle_label)
+        # ── Section 1: Quick Install Card (#121214, p-6 = 24px, zero nested cards) ──
+        quick_card = QFrame()
+        quick_card.setObjectName("Card")
+        quick_layout = QVBoxLayout(quick_card)
+        quick_layout.setContentsMargins(24, 24, 24, 24)
+        quick_layout.setSpacing(16)
 
-        # Top Card: Quick Link Install
-        quick_group = QGroupBox("Installazione Rapida da Link (1-Click)")
-        quick_layout = QVBoxLayout(quick_group)
-        quick_layout.setSpacing(10)
-
-        url_row = QHBoxLayout()
-        self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("https://api.streak.com/mcp")
-        self.url_input.setClearButtonEnabled(True)
-        self.url_input.setMinimumHeight(34)
+        quick_header = QHBoxLayout()
+        quick_title = QLabel("Installa da link")
+        _apply_compact_heading(quick_title, 13)
+        quick_header.addWidget(quick_title)
+        quick_header.addStretch(1)
 
         self.paste_btn = QPushButton("Incolla")
-        self.paste_btn.setMinimumHeight(34)
-        self.paste_btn.setToolTip("Incolla URL dagli appunti")
+        self.paste_btn.setObjectName("GhostButton")
+        self.test_btn = QPushButton("Verifica")
+        self.test_btn.setObjectName("GhostButton")
+        quick_header.addWidget(self.paste_btn)
+        quick_header.addWidget(self.test_btn)
+        quick_layout.addLayout(quick_header)
 
-        url_row.addWidget(QLabel("Link MCP:"))
-        url_row.addWidget(self.url_input, stretch=1)
-        url_row.addWidget(self.paste_btn)
-        quick_layout.addLayout(url_row)
+        # URL + Name row
+        inputs_row = QHBoxLayout()
+        inputs_row.setSpacing(10)
 
-        name_row = QHBoxLayout()
+        self.url_input = QLineEdit()
+        self.url_input.setFont(_mono_font(10))
+        self.url_input.setPlaceholderText("https://api.streak.com/mcp")
+        self.url_input.setMinimumHeight(38)
+
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Nome server (auto-dedotto dal link, es. streak)")
-        self.name_input.setMinimumHeight(32)
-        name_row.addWidget(QLabel("Nome ID:"))
-        name_row.addWidget(self.name_input, stretch=1)
+        self.name_input.setFont(_mono_font(10))
+        self.name_input.setPlaceholderText("id server")
+        self.name_input.setFixedWidth(160)
+        self.name_input.setMinimumHeight(38)
 
-        self.test_btn = QPushButton("Test Connessione")
-        self.test_btn.setMinimumHeight(32)
-        self.install_btn = QPushButton("Installa MCP")
-        self.install_btn.setMinimumHeight(32)
-        self.install_btn.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: white; font-weight: bold; "
-            "padding: 6px 16px; border-radius: 5px; }"
-            "QPushButton:hover { background-color: #1d4ed8; }"
-            "QPushButton:disabled { background-color: #6b7280; }"
-        )
-        name_row.addWidget(self.test_btn)
-        name_row.addWidget(self.install_btn)
-        quick_layout.addLayout(name_row)
+        self.install_btn = QPushButton("Installa")
+        self.install_btn.setObjectName("PrimaryButton")
+        self.install_btn.setMinimumHeight(38)
 
-        # Collapsible Auth & Transport Options
-        self.advanced_toggle_btn = QPushButton(
-            "▸ Opzioni Autenticazione & Bridge (Opzionale)"
-        )
+        inputs_row.addWidget(self.url_input, stretch=1)
+        inputs_row.addWidget(self.name_input)
+        inputs_row.addWidget(self.install_btn)
+        quick_layout.addLayout(inputs_row)
+
+        # Minimal 6px status dot + monospace telemetry row
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        self.status_dot = _make_status_dot(COLOR_DOT_IDLE)
+        self.status_label = QLabel("Incolla un endpoint MCP per la verifica automatica")
+        self.status_label.setFont(_mono_font(9))
+        self.status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        self.status_label.setWordWrap(True)
+        status_row.addWidget(self.status_dot)
+        status_row.addWidget(self.status_label, stretch=1)
+
+        self.advanced_toggle_btn = QPushButton("Opzioni auth / bridge")
+        self.advanced_toggle_btn.setObjectName("GhostButton")
         self.advanced_toggle_btn.setCheckable(True)
-        self.advanced_toggle_btn.setFlat(True)
-        self.advanced_toggle_btn.setStyleSheet("text-align: left; font-weight: 600;")
-        quick_layout.addWidget(self.advanced_toggle_btn)
+        status_row.addWidget(self.advanced_toggle_btn)
+        quick_layout.addLayout(status_row)
 
-        self.advanced_panel = QFrame()
-        self.advanced_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        # Collapsible Auth & Bridge section separated by 1px #1F1F23 divider (NO nested card!)
+        self.advanced_panel = QWidget()
         self.advanced_panel.setVisible(False)
         adv_layout = QVBoxLayout(self.advanced_panel)
+        adv_layout.setContentsMargins(0, 4, 0, 0)
+        adv_layout.setSpacing(12)
+        adv_layout.addWidget(_make_divider())
 
-        auth_form = QFormLayout()
+        auth_row = QHBoxLayout()
+        auth_row.setSpacing(10)
+        auth_lbl = QLabel("Autenticazione")
+        auth_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 12px;")
         self.auth_combo = QComboBox()
         self.auth_combo.addItems(
             [
-                "Nessuna / OAuth (gestito automaticamente da Antigravity)",
-                "Bearer Token (Authorization: Bearer ...)",
-                "Header API Key (es. X-Api-Key / X-Goog-Api-Key)",
-                "Header personalizzati (Chiave: Valore)",
+                "Nessuna / OAuth automatico",
+                "Bearer Token",
+                "API Key Header",
+                "Header personalizzati",
             ]
         )
-        auth_form.addRow("Autenticazione:", self.auth_combo)
+        auth_row.addWidget(auth_lbl)
+        auth_row.addWidget(self.auth_combo, stretch=1)
+        adv_layout.addLayout(auth_row)
 
         self.auth_stack = QStackedWidget()
 
-        # Auth 0: None / OAuth
-        none_widget = QLabel(
-            "Nessun header statico verrà scritto. Se il server usa OAuth, "
-            "Antigravity aprirà il flusso di accesso automaticamente."
-        )
-        none_widget.setWordWrap(True)
-        self.auth_stack.addWidget(none_widget)
+        none_lbl = QLabel("Nessun header statico. Antigravity gestirà OAuth se richiesto dal server.")
+        none_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        self.auth_stack.addWidget(none_lbl)
 
-        # Auth 1: Bearer Token
-        bearer_widget = QWidget()
-        bearer_layout = QHBoxLayout(bearer_widget)
-        bearer_layout.setContentsMargins(0, 0, 0, 0)
         self.bearer_input = QLineEdit()
-        self.bearer_input.setPlaceholderText("Incolla il tuo Bearer token...")
+        self.bearer_input.setFont(_mono_font(10))
+        self.bearer_input.setPlaceholderText("Bearer token...")
         self.bearer_input.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        bearer_layout.addWidget(self.bearer_input)
-        self.auth_stack.addWidget(bearer_widget)
+        self.auth_stack.addWidget(self.bearer_input)
 
-        # Auth 2: API Key Header
         apikey_widget = QWidget()
-        apikey_layout = QHBoxLayout(apikey_widget)
-        apikey_layout.setContentsMargins(0, 0, 0, 0)
+        apikey_row = QHBoxLayout(apikey_widget)
+        apikey_row.setContentsMargins(0, 0, 0, 0)
+        apikey_row.setSpacing(8)
         self.apikey_header_input = QLineEdit("X-Api-Key")
-        self.apikey_header_input.setPlaceholderText("Nome header (es. X-Api-Key)")
-        self.apikey_header_input.setMaximumWidth(180)
+        self.apikey_header_input.setFont(_mono_font(10))
+        self.apikey_header_input.setFixedWidth(160)
         self.apikey_value_input = QLineEdit()
-        self.apikey_value_input.setPlaceholderText("Valore API Key...")
+        self.apikey_value_input.setFont(_mono_font(10))
+        self.apikey_value_input.setPlaceholderText("Valore chiave...")
         self.apikey_value_input.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        apikey_layout.addWidget(self.apikey_header_input)
-        apikey_layout.addWidget(self.apikey_value_input, stretch=1)
+        apikey_row.addWidget(self.apikey_header_input)
+        apikey_row.addWidget(self.apikey_value_input, stretch=1)
         self.auth_stack.addWidget(apikey_widget)
 
-        # Auth 3: Custom Headers
         self.custom_headers_input = QPlainTextEdit()
-        self.custom_headers_input.setPlaceholderText(
-            "Un header per riga:\nX-Custom-Header: valore"
-        )
+        self.custom_headers_input.setFont(_mono_font(10))
+        self.custom_headers_input.setPlaceholderText("Chiave: Valore (uno per riga)")
         self.custom_headers_input.setFixedHeight(64)
         self.auth_stack.addWidget(self.custom_headers_input)
 
-        auth_form.addRow("", self.auth_stack)
-        adv_layout.addLayout(auth_form)
+        adv_layout.addWidget(self.auth_stack)
 
-        self.bridge_checkbox = QCheckBox(
-            "Usa bridge Stdio (npx -y mcp-remote) — utile solo per vecchi server legacy /sse"
-        )
+        self.bridge_checkbox = QCheckBox("Usa bridge npx -y mcp-remote (solo per vecchi endpoint /sse)")
         adv_layout.addWidget(self.bridge_checkbox)
+
         quick_layout.addWidget(self.advanced_panel)
+        root_layout.addWidget(quick_card)
 
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        quick_layout.addWidget(self.status_label)
+        # Generous 44px separation between major sections
+        root_layout.addSpacing(44)
 
-        root_layout.addWidget(quick_group)
+        # ── Section 2: Installed Servers / Raw JSON Tabs ────────────────────
+        tabs_bar = QHBoxLayout()
+        tabs_bar.setSpacing(20)
 
-        # Bottom Tabs: Installed Servers & Raw JSON
-        self.tabs = QTabWidget()
+        self.tab_servers_btn = QPushButton("Server")
+        self.tab_servers_btn.setObjectName("TabButton")
+        self.tab_servers_btn.setProperty("active", True)
 
-        # Tab 1: Installed Servers
-        servers_tab = QWidget()
-        servers_layout = QVBoxLayout(servers_tab)
+        self.tab_json_btn = QPushButton("JSON")
+        self.tab_json_btn.setObjectName("TabButton")
+        self.tab_json_btn.setProperty("active", False)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(
-            ["Attivo", "Nome", "Tipo", "Endpoint / Comando", "Azioni"]
-        )
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        servers_layout.addWidget(self.table)
+        self.server_count_label = QLabel("0")
+        self.server_count_label.setFont(_mono_font(9))
+        self.server_count_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
 
-        table_bar = QHBoxLayout()
-        self.add_stdio_btn = QPushButton("+ Aggiungi Server Locale (Stdio)")
+        tabs_bar.addWidget(self.tab_servers_btn)
+        tabs_bar.addWidget(self.server_count_label)
+        tabs_bar.addWidget(self.tab_json_btn)
+        tabs_bar.addStretch(1)
+
+        self.add_stdio_btn = QPushButton("+ Server locale")
+        self.add_stdio_btn.setObjectName("GhostButton")
         self.reload_btn = QPushButton("Ricarica")
-        self.config_path_label = QLabel(f"File: {self.manager.config_path}")
-        self.config_path_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        table_bar.addWidget(self.add_stdio_btn)
-        table_bar.addWidget(self.reload_btn)
-        table_bar.addStretch(1)
-        table_bar.addWidget(self.config_path_label)
-        servers_layout.addLayout(table_bar)
+        self.reload_btn.setObjectName("GhostButton")
+        tabs_bar.addWidget(self.add_stdio_btn)
+        tabs_bar.addWidget(self.reload_btn)
+        root_layout.addLayout(tabs_bar)
+        root_layout.addWidget(_make_divider())
+        root_layout.addSpacing(16)
 
-        self.tabs.addTab(servers_tab, "Server MCP Installati")
+        self.content_stack = QStackedWidget()
 
-        # Tab 2: Raw JSON Editor
-        raw_tab = QWidget()
-        raw_layout = QVBoxLayout(raw_tab)
+        # Page 0: Server list card (#121214)
+        servers_card = QFrame()
+        servers_card.setObjectName("Card")
+        servers_card_layout = QVBoxLayout(servers_card)
+        servers_card_layout.setContentsMargins(24, 16, 24, 16)
+        servers_card_layout.setSpacing(0)
+
+        self.servers_list_layout = QVBoxLayout()
+        self.servers_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.servers_list_layout.setSpacing(0)
+        servers_card_layout.addLayout(self.servers_list_layout)
+        servers_card_layout.addStretch(1)
+
+        self.content_stack.addWidget(servers_card)
+
+        # Page 1: Raw JSON card (#121214)
+        raw_card = QFrame()
+        raw_card.setObjectName("Card")
+        raw_layout = QVBoxLayout(raw_card)
+        raw_layout.setContentsMargins(24, 24, 24, 24)
+        raw_layout.setSpacing(14)
+
         self.raw_editor = QPlainTextEdit()
-        mono = QFont("Monospace")
-        mono.setStyleHint(QFont.StyleHint.TypeWriter)
-        self.raw_editor.setFont(mono)
+        self.raw_editor.setFont(_mono_font(10))
+        self.raw_editor.setMinimumHeight(280)
         raw_layout.addWidget(self.raw_editor)
 
         raw_bar = QHBoxLayout()
-        self.save_raw_btn = QPushButton("Valida e Salva JSON")
-        self.format_raw_btn = QPushButton("Formatta JSON")
-        self.reload_raw_btn = QPushButton("Ricarica da Disco")
-        self.restore_bak_btn = QPushButton("Ripristina Backup (.bak)")
-        raw_bar.addWidget(self.save_raw_btn)
+        raw_bar.setSpacing(8)
+        self.format_raw_btn = QPushButton("Formatta")
+        self.format_raw_btn.setObjectName("GhostButton")
+        self.restore_bak_btn = QPushButton("Ripristina .bak")
+        self.restore_bak_btn.setObjectName("GhostButton")
+        self.save_raw_btn = QPushButton("Salva JSON")
+        self.save_raw_btn.setObjectName("PrimaryButton")
+
         raw_bar.addWidget(self.format_raw_btn)
-        raw_bar.addWidget(self.reload_raw_btn)
-        raw_bar.addStretch(1)
         raw_bar.addWidget(self.restore_bak_btn)
+        raw_bar.addStretch(1)
+        raw_bar.addWidget(self.save_raw_btn)
         raw_layout.addLayout(raw_bar)
 
-        self.tabs.addTab(raw_tab, "Editor JSON Raw")
-        root_layout.addWidget(self.tabs, stretch=1)
+        self.content_stack.addWidget(raw_card)
+        root_layout.addWidget(self.content_stack)
+
+        # Footer config path (minimal monospace)
+        root_layout.addSpacing(20)
+        self.config_path_label = QLabel(str(self.manager.config_path))
+        self.config_path_label.setFont(_mono_font(9))
+        self.config_path_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        self.config_path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        root_layout.addWidget(self.config_path_label)
+        root_layout.addStretch(1)
+
+        canvas_layout.addWidget(container)
+        canvas_layout.addStretch(1)
+        scroll.setWidget(canvas)
 
         # Signal wiring
         self.url_input.textChanged.connect(self._on_url_changed)
@@ -593,9 +943,10 @@ class MainWindow(QMainWindow):
         self.install_btn.clicked.connect(self.install_from_quick_bar)
         self.add_stdio_btn.clicked.connect(self._add_stdio_server_dialog)
         self.reload_btn.clicked.connect(self.refresh_all)
+        self.tab_servers_btn.clicked.connect(lambda: self._switch_tab(0))
+        self.tab_json_btn.clicked.connect(lambda: self._switch_tab(1))
         self.save_raw_btn.clicked.connect(self._save_raw_json)
         self.format_raw_btn.clicked.connect(self._format_raw_json)
-        self.reload_raw_btn.clicked.connect(self.refresh_all)
         self.restore_bak_btn.clicked.connect(self._restore_backup)
         self.auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
         self.check_update_btn.clicked.connect(lambda: self._start_update_check(manual=True))
@@ -608,23 +959,33 @@ class MainWindow(QMainWindow):
         if check_updates_on_start:
             self._start_update_check(manual=False)
 
-    def _set_status(self, text: str, kind: str = "info") -> None:
-        colors = {
-            "info": "#60a5fa",
-            "ok": "#10b981",
-            "warn": "#f59e0b",
-            "err": "#ef4444",
+    def _switch_tab(self, index: int) -> None:
+        self.content_stack.setCurrentIndex(index)
+        self.tab_servers_btn.setProperty("active", index == 0)
+        self.tab_json_btn.setProperty("active", index == 1)
+        self.tab_servers_btn.style().unpolish(self.tab_servers_btn)
+        self.tab_servers_btn.style().polish(self.tab_servers_btn)
+        self.tab_json_btn.style().unpolish(self.tab_json_btn)
+        self.tab_json_btn.style().polish(self.tab_json_btn)
+
+    def _set_status(self, text: str, kind: str = "idle") -> None:
+        dot_colors = {
+            "idle": COLOR_DOT_IDLE,
+            "info": COLOR_TEXT_SECONDARY,
+            "ok": COLOR_DOT_OK,
+            "warn": COLOR_DOT_WARN,
+            "err": COLOR_DOT_ERR,
         }
-        color = colors.get(kind, "#60a5fa")
-        self.status_label.setStyleSheet(f"color: {color}; font-weight: 500;")
+        dot_color = dot_colors.get(kind, COLOR_DOT_IDLE)
+        self.status_dot.setStyleSheet(
+            f"background-color: {dot_color}; border-radius: 3px; border: none;"
+        )
+        text_color = COLOR_TEXT_MUTED if kind == "idle" else COLOR_TEXT_SECONDARY
+        self.status_label.setStyleSheet(f"color: {text_color};")
         self.status_label.setText(text)
 
     def _toggle_advanced(self, expanded: bool) -> None:
         self.advanced_panel.setVisible(expanded)
-        arrow = "▾" if expanded else "▸"
-        self.advanced_toggle_btn.setText(
-            f"{arrow} Opzioni Autenticazione & Bridge (Opzionale)"
-        )
 
     def _paste_from_clipboard(self) -> None:
         clipboard = QApplication.clipboard()
@@ -633,14 +994,16 @@ class MainWindow(QMainWindow):
             if text:
                 self.url_input.setText(text)
             else:
-                self._set_status("Gli appunti non contengono testo.", "warn")
+                self._set_status("Appunti vuoti", "warn")
 
     def _on_url_changed(self, text: str) -> None:
         stripped = text.strip()
+        self._probe_timer.stop()
         if not stripped:
             self._name_manually_edited = False
             self.name_input.clear()
             self.bridge_checkbox.setChecked(False)
+            self._set_status("Incolla un endpoint MCP per la verifica automatica", "idle")
             return
 
         if not self._name_manually_edited:
@@ -648,10 +1011,20 @@ class MainWindow(QMainWindow):
 
         if is_sse_url(stripped):
             self.bridge_checkbox.setChecked(True)
-            self._set_status(
-                "Rilevato endpoint /sse: abilitato automaticamente il bridge npx mcp-remote.",
-                "warn",
-            )
+            self._set_status("Endpoint /sse · bridge npx mcp-remote preselezionato", "warn")
+
+        if self._auto_probe_on_change and "." in stripped and len(stripped) >= 8:
+            self._probe_timer.start()
+
+    def _auto_probe_current_url(self) -> None:
+        raw_url = self.url_input.text().strip()
+        if not raw_url:
+            return
+        try:
+            normalize_url(raw_url)
+        except ValueError:
+            return
+        self._start_probe()
 
     def _on_name_edited(self, text: str) -> None:
         self._name_manually_edited = bool(text.strip())
@@ -663,7 +1036,7 @@ class MainWindow(QMainWindow):
         if mode == 1:
             token = self.bearer_input.text().strip()
             if not token:
-                raise ValueError("Inserisci il Bearer token o seleziona 'Nessuna / OAuth'.")
+                raise ValueError("Inserisci il Bearer token o scegli 'Nessuna / OAuth'.")
             if token.lower().startswith("bearer "):
                 token = token[7:].strip()
             return {"Authorization": f"Bearer {token}"}
@@ -671,14 +1044,14 @@ class MainWindow(QMainWindow):
             hdr_name = self.apikey_header_input.text().strip()
             hdr_val = self.apikey_value_input.text().strip()
             if not hdr_name or not hdr_val:
-                raise ValueError("Inserisci sia il nome dell'header che il valore API Key.")
+                raise ValueError("Inserisci nome header e valore API Key.")
             return {hdr_name: hdr_val}
         return parse_headers_text(self.custom_headers_input.toPlainText())
 
     def _start_probe(self) -> None:
         url = self.url_input.text().strip()
         if not url:
-            self._set_status("Inserisci un link MCP prima di testare la connessione.", "warn")
+            self._set_status("Inserisci un link MCP prima di verificare", "warn")
             return
         try:
             headers = self._collect_quick_headers()
@@ -686,27 +1059,39 @@ class MainWindow(QMainWindow):
             self._set_status(str(exc), "err")
             return
 
+        if self._probe_worker is not None and self._probe_worker.isRunning():
+            return
+
         self.test_btn.setEnabled(False)
-        self._set_status("Test connessione HTTP in corso...", "info")
+        self._set_status("Handshake MCP (claude-code) in corso...", "info")
         self._probe_worker = ProbeWorker(url, headers=headers, parent=self)
         self._probe_worker.finished_probe.connect(self._on_probe_finished)
         self._probe_worker.start()
 
-    def _on_probe_finished(self, result: dict[str, Any]) -> None:
+    def _on_probe_finished(self, probed_url: str, result: dict[str, Any]) -> None:
         self.test_btn.setEnabled(True)
+        # Ignore stale responses if the user already changed the URL
+        if probed_url.strip() != self.url_input.text().strip():
+            return
+
         if result.get("is_legacy_sse"):
             self.bridge_checkbox.setChecked(True)
+
+        suggested = str(result.get("suggested_name") or "").strip()
+        if suggested and not self._name_manually_edited:
+            self.name_input.setText(suggested)
+
         if result.get("reachable"):
             kind = "warn" if result.get("needs_auth") else "ok"
-            self._set_status(str(result.get("message", "Endpoint raggiungibile.")), kind)
+            self._set_status(str(result.get("message", "Endpoint attivo")), kind)
         else:
-            self._set_status(str(result.get("message", "Endpoint non raggiungibile.")), "err")
+            self._set_status(str(result.get("message", "Endpoint non raggiungibile")), "err")
 
     def install_from_quick_bar(self, confirm_overwrite: bool = True) -> bool:
         """Validate quick-install inputs and write the remote server to mcp_config.json."""
         raw_url = self.url_input.text().strip()
         if not raw_url:
-            self._set_status("Incolla prima il link del server MCP.", "err")
+            self._set_status("Incolla prima il link del server MCP", "err")
             return False
 
         try:
@@ -722,7 +1107,7 @@ class MainWindow(QMainWindow):
             reply = QMessageBox.question(
                 self,
                 "Server già presente",
-                f"Il server '{name}' esiste già nella configurazione.\nVuoi aggiornarlo con il nuovo URL?",
+                f"Il server '{name}' esiste già.\nVuoi aggiornarlo con il nuovo URL?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
@@ -737,79 +1122,123 @@ class MainWindow(QMainWindow):
             disabled=False,
         )
         self.refresh_all()
-        mode_desc = "tramite bridge npx mcp-remote" if use_bridge else "come HTTP remoto"
-        self._set_status(
-            f"Server '{name}' installato con successo ({mode_desc}) in Antigravity!",
-            "ok",
-        )
+        mode_desc = "bridge" if use_bridge else "http"
+        self._set_status(f"Installato '{name}' ({mode_desc}) in Antigravity", "ok")
         return True
 
+    def _clear_server_rows(self) -> None:
+        self.server_rows.clear()
+        while self.servers_list_layout.count():
+            item = self.servers_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _build_server_row(self, name: str, entry: dict[str, Any]) -> QFrame:
+        row = QFrame()
+        row.setObjectName("ServerRow")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 12, 8, 12)
+        row_layout.setSpacing(12)
+
+        enabled = not bool(entry.get("disabled", False))
+        dot = _make_status_dot(COLOR_DOT_OK if enabled else COLOR_DOT_IDLE)
+        row_layout.addWidget(dot)
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(2)
+
+        top_line = QHBoxLayout()
+        top_line.setSpacing(8)
+
+        name_lbl = QLabel(name)
+        name_font = QFont()
+        name_font.setWeight(QFont.Weight.DemiBold)
+        name_lbl.setFont(name_font)
+        name_lbl.setStyleSheet(
+            f"color: {COLOR_TEXT_PRIMARY if enabled else COLOR_TEXT_MUTED};"
+        )
+
+        kind = MCPConfigManager.classify_server(entry)
+        kind_map = {"remote": "http", "bridge": "sse-bridge", "stdio": "stdio"}
+        kind_lbl = QLabel(kind_map.get(kind, kind))
+        kind_lbl.setFont(_mono_font(9))
+        kind_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+        top_line.addWidget(name_lbl)
+        top_line.addWidget(kind_lbl)
+        top_line.addStretch(1)
+
+        endpoint = MCPConfigManager.get_server_endpoint(entry)
+        secrets = MCPConfigManager.summarize_secrets_count(entry)
+        endpoint_lbl = QLabel(f"{endpoint}{secrets}")
+        endpoint_lbl.setFont(_mono_font(9))
+        endpoint_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY};")
+        endpoint_lbl.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+
+        info_col.addLayout(top_line)
+        info_col.addWidget(endpoint_lbl)
+        row_layout.addLayout(info_col, stretch=1)
+
+        # Progressive Disclosure: single contextual '...' menu button
+        menu_btn = QPushButton("···")
+        menu_btn.setObjectName("RowMenuButton")
+        menu_btn.setFixedWidth(34)
+        menu_btn.clicked.connect(
+            lambda _checked=False, btn=menu_btn, srv=name, ent=entry, en=enabled: (
+                self._open_row_menu(btn, srv, ent, en)
+            )
+        )
+        row_layout.addWidget(menu_btn)
+        return row
+
+    def _open_row_menu(
+        self,
+        anchor: QPushButton,
+        name: str,
+        entry: dict[str, Any],
+        enabled: bool,
+    ) -> None:
+        menu = QMenu(self)
+        toggle_action = menu.addAction("Disattiva" if enabled else "Attiva")
+        edit_action = menu.addAction("Modifica")
+        menu.addSeparator()
+        delete_action = menu.addAction("Elimina")
+
+        chosen = menu.exec(anchor.mapToGlobal(anchor.rect().bottomRight()))
+        if chosen == toggle_action:
+            self._on_toggle_server(name, not enabled)
+        elif chosen == edit_action:
+            self._edit_server(name, entry)
+        elif chosen == delete_action:
+            self._delete_server(name)
+
     def refresh_all(self) -> None:
-        """Reload server table and raw JSON editor from disk."""
+        """Reload server list and raw JSON editor from disk."""
         try:
             servers = self.manager.get_servers()
             raw_text = self.manager.load_raw_text()
         except Exception as exc:  # noqa: BLE001
-            self._set_status(f"Errore lettura mcp_config.json: {exc}", "err")
+            self._set_status(f"Errore lettura config · {exc}", "err")
             return
 
-        self.table.setRowCount(0)
-        for row_idx, (name, entry) in enumerate(sorted(servers.items())):
-            self.table.insertRow(row_idx)
-            enabled = not bool(entry.get("disabled", False))
+        self._clear_server_rows()
+        sorted_items = sorted(servers.items())
+        self.server_count_label.setText(str(len(sorted_items)))
 
-            # Col 0: Enable checkbox
-            chk_container = QWidget()
-            chk_layout = QHBoxLayout(chk_container)
-            chk_layout.setContentsMargins(0, 0, 0, 0)
-            chk_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chk = QCheckBox()
-            chk.setChecked(enabled)
-            chk.toggled.connect(
-                lambda state, srv=name: self._on_toggle_server(srv, state)
-            )
-            chk_layout.addWidget(chk)
-            self.table.setCellWidget(row_idx, 0, chk_container)
-
-            # Col 1: Name
-            name_item = QTableWidgetItem(name)
-            name_font = QFont()
-            name_font.setBold(True)
-            name_item.setFont(name_font)
-            self.table.setItem(row_idx, 1, name_item)
-
-            # Col 2: Type badge
-            kind = MCPConfigManager.classify_server(entry)
-            kind_labels = {
-                "remote": "HTTP REMOTO",
-                "bridge": "BRIDGE SSE",
-                "stdio": "STDIO LOCALE",
-            }
-            kind_item = QTableWidgetItem(kind_labels.get(kind, kind.upper()))
-            self.table.setItem(row_idx, 2, kind_item)
-
-            # Col 3: Endpoint / command summary (secrets redacted)
-            endpoint = MCPConfigManager.get_server_endpoint(entry)
-            secret_tag = MCPConfigManager.summarize_secrets_count(entry)
-            endpoint_item = QTableWidgetItem(f"{endpoint}{secret_tag}")
-            self.table.setItem(row_idx, 3, endpoint_item)
-
-            # Col 4: Actions
-            actions_widget = QWidget()
-            actions_layout = QHBoxLayout(actions_widget)
-            actions_layout.setContentsMargins(4, 2, 4, 2)
-            actions_layout.setSpacing(6)
-            edit_btn = QPushButton("Modifica")
-            del_btn = QPushButton("Elimina")
-            edit_btn.clicked.connect(
-                lambda _checked=False, srv=name, ent=entry: self._edit_server(srv, ent)
-            )
-            del_btn.clicked.connect(
-                lambda _checked=False, srv=name: self._delete_server(srv)
-            )
-            actions_layout.addWidget(edit_btn)
-            actions_layout.addWidget(del_btn)
-            self.table.setCellWidget(row_idx, 4, actions_widget)
+        if not sorted_items:
+            empty = QLabel("Nessun server MCP configurato.")
+            empty.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; padding: 20px 8px;")
+            self.servers_list_layout.addWidget(empty)
+        else:
+            for idx, (name, entry) in enumerate(sorted_items):
+                if idx > 0:
+                    self.servers_list_layout.addWidget(_make_divider())
+                row = self._build_server_row(name, entry)
+                self.servers_list_layout.addWidget(row)
+                self.server_rows.append(row)
 
         self.raw_editor.setPlainText(raw_text)
         self.restore_bak_btn.setEnabled(self.manager.backup_path.exists())
@@ -818,12 +1247,10 @@ class MainWindow(QMainWindow):
         try:
             self.manager.set_server_enabled(name, enabled)
             state_txt = "attivato" if enabled else "disattivato"
-            self._set_status(f"Server '{name}' {state_txt}.", "info")
-            self.raw_editor.setPlainText(self.manager.load_raw_text())
-            self.restore_bak_btn.setEnabled(self.manager.backup_path.exists())
-        except Exception as exc:  # noqa: BLE001
-            self._set_status(f"Errore aggiornamento '{name}': {exc}", "err")
             self.refresh_all()
+            self._set_status(f"Server '{name}' {state_txt}", "ok" if enabled else "idle")
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Errore aggiornamento '{name}' · {exc}", "err")
 
     def _add_stdio_server_dialog(self) -> None:
         dialog = ServerEditDialog(
@@ -836,7 +1263,7 @@ class MainWindow(QMainWindow):
                 name, entry = result
                 self.manager.set_server_entry(name, entry)
                 self.refresh_all()
-                self._set_status(f"Server '{name}' salvato.", "ok")
+                self._set_status(f"Server '{name}' salvato", "ok")
 
     def _edit_server(self, name: str, entry: dict[str, Any]) -> None:
         dialog = ServerEditDialog(parent=self, name=name, entry=entry)
@@ -846,20 +1273,20 @@ class MainWindow(QMainWindow):
                 srv_name, new_entry = result
                 self.manager.set_server_entry(srv_name, new_entry)
                 self.refresh_all()
-                self._set_status(f"Server '{srv_name}' aggiornato.", "ok")
+                self._set_status(f"Server '{srv_name}' aggiornato", "ok")
 
     def _delete_server(self, name: str) -> None:
         reply = QMessageBox.question(
             self,
-            "Conferma eliminazione",
-            f"Vuoi rimuovere il server MCP '{name}' dalla configurazione di Antigravity?",
+            "Elimina server",
+            f"Rimuovere '{name}' dalla configurazione di Antigravity?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
         if self.manager.remove_server(name):
             self.refresh_all()
-            self._set_status(f"Server '{name}' rimosso.", "info")
+            self._set_status(f"Server '{name}' rimosso", "idle")
 
     def _format_raw_json(self) -> None:
         try:
@@ -867,7 +1294,7 @@ class MainWindow(QMainWindow):
             self.raw_editor.setPlainText(
                 json.dumps(parsed, indent=2, ensure_ascii=False) + "\n"
             )
-            self._set_status("JSON formattato correttamente.", "info")
+            self._set_status("JSON formattato", "info")
         except json.JSONDecodeError as exc:
             QMessageBox.warning(self, "JSON non valido", f"Errore di sintassi JSON:\n{exc}")
 
@@ -875,18 +1302,18 @@ class MainWindow(QMainWindow):
         try:
             self.manager.save_raw_text(self.raw_editor.toPlainText())
             self.refresh_all()
-            self._set_status("Configurazione JSON salvata con backup automatico.", "ok")
+            self._set_status("JSON salvato (backup .bak creato)", "ok")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Errore salvataggio JSON", str(exc))
 
     def _restore_backup(self) -> None:
         if not self.manager.backup_path.exists():
-            self._set_status("Nessun file di backup (.bak) trovato.", "warn")
+            self._set_status("Nessun backup .bak trovato", "warn")
             return
         reply = QMessageBox.question(
             self,
             "Ripristina backup",
-            f"Vuoi ripristinare {self.manager.config_path.name} dall'ultimo backup (.bak)?",
+            f"Ripristinare {self.manager.config_path.name} dall'ultimo .bak?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -894,7 +1321,7 @@ class MainWindow(QMainWindow):
         try:
             if self.manager.restore_backup():
                 self.refresh_all()
-                self._set_status("Configurazione ripristinata dal backup (.bak).", "ok")
+                self._set_status("Configurazione ripristinata da .bak", "ok")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Errore ripristino", str(exc))
 
@@ -908,7 +1335,7 @@ class MainWindow(QMainWindow):
         self._manual_update_check = manual
         self.check_update_btn.setEnabled(False)
         if manual:
-            self._set_status("Controllo nuove versioni su GitHub in corso...", "info")
+            self._set_status("Controllo aggiornamenti su GitHub...", "info")
         self._update_check_worker = UpdateCheckWorker(parent=self)
         self._update_check_worker.finished_check.connect(self._on_update_check_finished)
         self._update_check_worker.start()
@@ -922,10 +1349,7 @@ class MainWindow(QMainWindow):
 
         if not info.update_available:
             if self._manual_update_check:
-                self._set_status(
-                    f"agymcp v{info.current_version} è già aggiornato all'ultima versione.",
-                    "ok",
-                )
+                self._set_status(f"agymcp v{info.current_version} è già aggiornato", "ok")
             return
 
         self._pending_update = info
@@ -934,15 +1358,13 @@ class MainWindow(QMainWindow):
         if self.auto_update_checkbox.isChecked():
             self.update_now_btn.setVisible(False)
             self.update_banner_label.setText(
-                f"Nuova versione v{info.latest_version} rilevata! "
-                "Download e installazione automatica in corso..."
+                f"v{info.latest_version} disponibile · installazione automatica..."
             )
             self._start_update_install()
         else:
             self.update_now_btn.setVisible(True)
             self.update_banner_label.setText(
-                f"Nuova versione v{info.latest_version} disponibile "
-                f"(attuale: v{info.current_version})."
+                f"v{info.latest_version} disponibile (attuale v{info.current_version})"
             )
 
     def _start_update_install(self) -> None:
@@ -952,7 +1374,7 @@ class MainWindow(QMainWindow):
             return
         self.update_now_btn.setEnabled(False)
         self.update_banner_label.setText(
-            f"Installazione aggiornamento v{self._pending_update.latest_version} in corso..."
+            f"Installazione v{self._pending_update.latest_version} in corso..."
         )
         self._update_install_worker = UpdateInstallWorker(
             self._pending_update, parent=self
@@ -965,13 +1387,19 @@ class MainWindow(QMainWindow):
     def _on_update_install_finished(self, result: UpdateResult) -> None:
         self.update_now_btn.setEnabled(True)
         if result.success:
+            self.update_dot.setStyleSheet(
+                f"background-color: {COLOR_DOT_OK}; border-radius: 3px; border: none;"
+            )
             self.update_now_btn.setVisible(False)
             self.restart_app_btn.setVisible(result.restart_required)
             self.update_banner_label.setText(
-                f"{result.message} Clicca 'Riavvia agymcp' per usare subito la v{result.new_version}."
+                f"v{result.new_version} installata · riavvia per applicare"
             )
             self._set_status(result.message, "ok")
         else:
+            self.update_dot.setStyleSheet(
+                f"background-color: {COLOR_DOT_ERR}; border-radius: 3px; border: none;"
+            )
             self.update_now_btn.setVisible(True)
             self.update_banner_label.setText(result.message)
             self._set_status(result.message, "err")
@@ -980,6 +1408,9 @@ class MainWindow(QMainWindow):
         launcher = Path.home() / ".local" / "bin" / "agymcp"
         if launcher.exists() and os.access(launcher, os.X_OK):
             os.execv(str(launcher), [str(launcher)])
+        system_bin = Path("/usr/bin/agymcp")
+        if system_bin.exists() and os.access(system_bin, os.X_OK):
+            os.execv(str(system_bin), [str(system_bin)])
         os.execv(sys.executable, [sys.executable, "-m", "agymcp.cli"])
 
 
