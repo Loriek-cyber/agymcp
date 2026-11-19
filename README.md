@@ -9,7 +9,15 @@ Applicazione desktop nativa (**PyQt6**) e CLI rapida per installare e gestire i 
 - **Test Connessione HTTP**: verifica raggiungibilità dell'endpoint, rilevamento di risposte `401/403` (auth richiesta) e riconoscimento automatico dei vecchi endpoint `/sse` con opzione bridge `npx -y mcp-remote`.
 - **Manager Completo**: tabella con switch Attiva/Disattiva per ogni server, aggiunta e modifica di server locali **Stdio** (`uvx`, `npx`, `uv`, ecc.) ed editor JSON raw con validazione e ripristino da `.bak`.
 
-## Installazione Locale
+## Installazione
+
+### Fedora (Pacchetto `.rpm` dalle GitHub Releases)
+Scarica l'ultimo `agymcp-*-1.fedora.noarch.rpm` dalla pagina [Releases](https://github.com/Loriek-cyber/agymcp/releases) e installalo con:
+```bash
+sudo dnf install ./agymcp-*-1.fedora.noarch.rpm
+```
+
+### Installazione Locale (da sorgente)
 
 ```bash
 chmod +x install.sh
