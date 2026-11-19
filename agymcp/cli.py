@@ -16,6 +16,7 @@ from agymcp.core import (
     parse_headers_text,
     probe_mcp_url,
 )
+from agymcp.oauth import refresh_oauth_token, run_oauth_login
 from agymcp.updater import apply_update, check_for_updates
 
 
@@ -50,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="KEY: VALUE",
         help="Header HTTP personalizzato (ripetibile, es. -H 'X-Api-Key: secret')",
+    )
+    parser.add_argument(
+        "--auth",
+        action="store_true",
+        help="Esegui autenticazione OAuth 2.1 nel browser prima di salvare il server",
     )
     parser.add_argument(
         "--bridge",
@@ -93,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--remove",
         metavar="NOME",
         help="Rimuove un server MCP dalla configurazione",
+    )
+    actions.add_argument(
+        "--reauth",
+        metavar="NOME",
+        help="Rinnova o riesegue il login OAuth 2.1 per un server remoto esistente",
     )
     actions.add_argument(
         "--test",
@@ -160,6 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         and not args.enable
         and not args.disable
         and not args.remove
+        and not args.reauth
         and not args.test
         and not args.check_update
         and not args.update
@@ -215,6 +227,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Server '{args.remove}' non trovato.", file=sys.stderr)
             return 1
 
+        if args.reauth:
+            servers = manager.get_servers()
+            entry = servers.get(args.reauth)
+            if not entry:
+                print(f"Server '{args.reauth}' non trovato.", file=sys.stderr)
+                return 1
+            if MCPConfigManager.classify_server(entry) != "remote":
+                print(f"Server '{args.reauth}' non è un server HTTP remoto.", file=sys.stderr)
+                return 1
+            srv_url = MCPConfigManager.get_server_endpoint(entry)
+            token = refresh_oauth_token(args.reauth)
+            if token is None:
+                token = run_oauth_login(
+                    srv_url,
+                    args.reauth,
+                    status_callback=lambda m: print(f"  {m}"),
+                )
+            headers = dict(entry.get("headers") or {})
+            headers["Authorization"] = f"Bearer {token.access_token}"
+            entry["headers"] = headers
+            manager.set_server_entry(args.reauth, entry)
+            probe = probe_mcp_url(srv_url, headers=headers)
+            print(f"Token OAuth aggiornato per '{args.reauth}'.")
+            if probe.get("message"):
+                print(f"Verifica MCP: {probe['message']}")
+            return 0
+
         if args.test:
             headers = _parse_cli_headers(args)
             result = probe_mcp_url(args.test, headers=headers)
@@ -225,6 +264,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             norm_url = normalize_url(args.url)
             name = (args.name or "").strip() or infer_server_name(norm_url)
             headers = _parse_cli_headers(args)
+            if args.auth:
+                token = run_oauth_login(
+                    norm_url,
+                    name,
+                    status_callback=lambda m: print(f"  {m}"),
+                )
+                headers["Authorization"] = f"Bearer {token.access_token}"
+                probe = probe_mcp_url(norm_url, headers=headers)
+                if probe.get("message"):
+                    print(f"Verifica MCP: {probe['message']}")
             manager.add_remote_server(
                 name=name,
                 url=norm_url,

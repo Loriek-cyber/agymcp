@@ -65,10 +65,10 @@ jobs:
             echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Python wheel, sdist, Fedora RPM & standalone updater bundle
+      - name: Build Python wheel, sdist, Fedora RPM, Debian DEB & standalone updater bundle
         run: |
           python -m build
-          chmod +x packaging/fedora/build_rpm.sh
+          chmod +x packaging/fedora/build_rpm.sh packaging/debian/build_deb.sh
           if [ "${{ steps.version.outputs.should_release }}" = "true" ]; then
             BUILD_VERSION="${{ steps.version.outputs.new_version }}"
             TAG="${{ steps.version.outputs.tag }}"
@@ -83,6 +83,7 @@ jobs:
             BUILD_VERSION="$(python -c "from agymcp import __version__; print(__version__)")"
           fi
           ./packaging/fedora/build_rpm.sh "${BUILD_VERSION}" dist
+          ./packaging/debian/build_deb.sh "${BUILD_VERSION}" dist
           ls -lh dist/
 
       - name: Commit bumped version, tag & push

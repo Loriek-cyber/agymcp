@@ -42,6 +42,11 @@ from agymcp.core import (
     parse_headers_text,
     probe_mcp_url,
 )
+from agymcp.oauth import (
+    OAuthTokenResult,
+    refresh_oauth_token,
+    run_oauth_login,
+)
 from agymcp.updater import (
     UpdateInfo,
     UpdateResult,
@@ -341,6 +346,48 @@ class UpdateInstallWorker(QThread):
         self.finished_install.emit(apply_update(self.info))
 
 
+class OAuthLoginWorker(QThread):
+    """Background thread executing OAuth 2.1 + PKCE login and post-auth MCP verification."""
+
+    status_update = pyqtSignal(str)
+    finished_oauth = pyqtSignal(str, str, object, str, dict)
+
+    def __init__(
+        self,
+        server_name: str,
+        url: str,
+        try_refresh_first: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.server_name = server_name
+        self.url = url
+        self.try_refresh_first = try_refresh_first
+
+    def run(self) -> None:
+        try:
+            token: OAuthTokenResult | None = None
+            if self.try_refresh_first:
+                self.status_update.emit("Rinnovo token OAuth in corso...")
+                token = refresh_oauth_token(self.server_name)
+
+            if token is None:
+                token = run_oauth_login(
+                    mcp_url=self.url,
+                    server_name=self.server_name,
+                    status_callback=self.status_update.emit,
+                )
+
+            self.status_update.emit("Verifica token con handshake MCP (claude-code)...")
+            probe = probe_mcp_url(
+                self.url,
+                headers={"Authorization": f"Bearer {token.access_token}"},
+            )
+            self.finished_oauth.emit(self.server_name, self.url, token, "", probe)
+        except Exception as exc:  # noqa: BLE001
+            self.finished_oauth.emit(self.server_name, self.url, None, str(exc), {})
+
+
 def _extract_bridge_details(entry: dict[str, Any]) -> tuple[str, dict[str, str]]:
     """Extract URL and --header pairs from an npx mcp-remote bridge entry."""
     args = [str(a) for a in entry.get("args", [])]
@@ -605,7 +652,10 @@ class MainWindow(QMainWindow):
         self.manager = manager or MCPConfigManager()
         self._name_manually_edited = False
         self._auto_probe_on_change = auto_probe_on_change
+        self._detected_auth_type = "none"
         self._probe_worker: ProbeWorker | None = None
+        self._oauth_worker: OAuthLoginWorker | None = None
+        self._oauth_mode_is_reauth = False
         self._update_check_worker: UpdateCheckWorker | None = None
         self._update_install_worker: UpdateInstallWorker | None = None
         self._pending_update: UpdateInfo | None = None
@@ -999,6 +1049,8 @@ class MainWindow(QMainWindow):
     def _on_url_changed(self, text: str) -> None:
         stripped = text.strip()
         self._probe_timer.stop()
+        self._detected_auth_type = "none"
+        self.install_btn.setText("Installa")
         if not stripped:
             self._name_manually_edited = False
             self.name_input.clear()
@@ -1082,13 +1134,21 @@ class MainWindow(QMainWindow):
             self.name_input.setText(suggested)
 
         if result.get("reachable"):
+            auth_type = str(result.get("auth_type") or "none")
+            self._detected_auth_type = auth_type
+            if auth_type == "oauth" and self.auth_combo.currentIndex() == 0 and not self.bridge_checkbox.isChecked():
+                self.install_btn.setText("Accedi e Installa")
+            else:
+                self.install_btn.setText("Installa")
             kind = "warn" if result.get("needs_auth") else "ok"
             self._set_status(str(result.get("message", "Endpoint attivo")), kind)
         else:
+            self._detected_auth_type = "none"
+            self.install_btn.setText("Installa")
             self._set_status(str(result.get("message", "Endpoint non raggiungibile")), "err")
 
     def install_from_quick_bar(self, confirm_overwrite: bool = True) -> bool:
-        """Validate quick-install inputs and write the remote server to mcp_config.json."""
+        """Validate quick-install inputs and write the remote server (or run OAuth flow)."""
         raw_url = self.url_input.text().strip()
         if not raw_url:
             self._set_status("Incolla prima il link del server MCP", "err")
@@ -1114,6 +1174,15 @@ class MainWindow(QMainWindow):
                 return False
 
         use_bridge = self.bridge_checkbox.isChecked()
+        if (
+            self._detected_auth_type == "oauth"
+            and not headers
+            and not use_bridge
+            and self.auth_combo.currentIndex() == 0
+        ):
+            self._start_oauth_flow(name=name, url=norm_url, is_reauth=False)
+            return True
+
         self.manager.add_remote_server(
             name=name,
             url=norm_url,
@@ -1125,6 +1194,70 @@ class MainWindow(QMainWindow):
         mode_desc = "bridge" if use_bridge else "http"
         self._set_status(f"Installato '{name}' ({mode_desc}) in Antigravity", "ok")
         return True
+
+    def _start_oauth_flow(
+        self,
+        name: str,
+        url: str,
+        is_reauth: bool = False,
+    ) -> None:
+        if self._oauth_worker is not None and self._oauth_worker.isRunning():
+            return
+        self._oauth_mode_is_reauth = is_reauth
+        self.install_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
+        self._set_status("Avvio autenticazione OAuth 2.1 nel browser...", "info")
+        self._oauth_worker = OAuthLoginWorker(
+            server_name=name,
+            url=url,
+            try_refresh_first=is_reauth,
+            parent=self,
+        )
+        self._oauth_worker.status_update.connect(
+            lambda msg: self._set_status(msg, "info")
+        )
+        self._oauth_worker.finished_oauth.connect(self._on_oauth_finished)
+        self._oauth_worker.start()
+
+    def _on_oauth_finished(
+        self,
+        server_name: str,
+        url: str,
+        token: OAuthTokenResult | None,
+        error: str,
+        probe: dict[str, Any],
+    ) -> None:
+        self.install_btn.setEnabled(True)
+        self.test_btn.setEnabled(True)
+
+        if error or token is None:
+            self._set_status(f"OAuth fallito · {error}", "err")
+            return
+
+        if self._oauth_mode_is_reauth:
+            servers = self.manager.get_servers()
+            entry = servers.get(server_name, {"serverUrl": url, "disabled": False})
+            headers = dict(entry.get("headers") or {})
+            headers["Authorization"] = f"Bearer {token.access_token}"
+            entry["headers"] = headers
+            self.manager.set_server_entry(server_name, entry)
+        else:
+            self.manager.add_remote_server(
+                name=server_name,
+                url=url,
+                headers={"Authorization": f"Bearer {token.access_token}"},
+                use_bridge=False,
+                disabled=False,
+            )
+
+        self._detected_auth_type = "none"
+        self.install_btn.setText("Installa")
+        self.refresh_all()
+
+        tools_count = probe.get("tools_count")
+        extra = f" · {tools_count} tools verificati" if tools_count is not None else ""
+        action_word = "rinnovato" if self._oauth_mode_is_reauth else "autenticato e installato"
+        self._set_status(f"Server '{server_name}' {action_word}{extra}", "ok")
 
     def _clear_server_rows(self) -> None:
         self.server_rows.clear()
@@ -1204,6 +1337,9 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         toggle_action = menu.addAction("Disattiva" if enabled else "Attiva")
         edit_action = menu.addAction("Modifica")
+        oauth_action = None
+        if MCPConfigManager.classify_server(entry) == "remote":
+            oauth_action = menu.addAction("Autentica / Rinnova OAuth")
         menu.addSeparator()
         delete_action = menu.addAction("Elimina")
 
@@ -1212,6 +1348,10 @@ class MainWindow(QMainWindow):
             self._on_toggle_server(name, not enabled)
         elif chosen == edit_action:
             self._edit_server(name, entry)
+        elif oauth_action is not None and chosen == oauth_action:
+            url = MCPConfigManager.get_server_endpoint(entry)
+            if url:
+                self._start_oauth_flow(name=name, url=url, is_reauth=True)
         elif chosen == delete_action:
             self._delete_server(name)
 
@@ -1421,6 +1561,7 @@ def launch_gui(
     """Launch the PyQt6 desktop application."""
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("agymcp")
+    app.setDesktopFileName("agymcp")
     window = MainWindow(manager=manager, initial_url=initial_url)
     window.show()
     return app.exec()

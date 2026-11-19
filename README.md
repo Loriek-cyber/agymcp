@@ -17,6 +17,12 @@ Scarica l'ultimo `agymcp-*-1.fedora.noarch.rpm` dalla pagina [Releases](https://
 sudo dnf install ./agymcp-*-1.fedora.noarch.rpm
 ```
 
+### Ubuntu / Debian (Pacchetto `.deb` dalle GitHub Releases)
+Scarica l'ultimo `agymcp_*-1_all.deb` dalla pagina [Releases](https://github.com/Loriek-cyber/agymcp/releases) e installalo con:
+```bash
+sudo apt install ./agymcp_*-1_all.deb
+```
+
 ### Installazione Locale (da sorgente)
 
 ```bash
@@ -44,6 +50,12 @@ Lo script installa:
 ```bash
 # Installa subito un server MCP remoto da link (nome 'streak' auto-dedotto)
 agymcp https://api.streak.com/mcp
+
+# Installa eseguendo subito il login OAuth 2.1 + PKCE nel browser
+agymcp https://api.streak.com/mcp --auth
+
+# Rinnova o riesegui OAuth 2.1 su un server già installato
+agymcp --reauth streak
 
 # Specifica un nome personalizzato o autenticazione
 agymcp https://api.streak.com/mcp -n my-streak -b IL_TUO_TOKEN

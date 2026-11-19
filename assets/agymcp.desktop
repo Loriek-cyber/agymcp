@@ -1,11 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=Antigravity MCP Installer
-GenericName=MCP Server Manager
-Comment=Installa e gestisci server MCP su Antigravity con un link
+Version=1.0
+Name=agymcp
+GenericName=Antigravity MCP Installer
+Comment=Installa, autentica (OAuth) e gestisci server MCP su Antigravity
 Exec=/home/loriek/.local/bin/agymcp
 Icon=agymcp
 Terminal=false
-Categories=Development;Utility;
-Keywords=mcp;antigravity;gemini;ai;
+Categories=Development;
+Keywords=agymcp;mcp;antigravity;gemini;ai;oauth;
 StartupNotify=true
+StartupWMClass=agymcp
