@@ -6,6 +6,7 @@ import argparse
 import sys
 from typing import Sequence
 
+from agymcp import __version__
 from agymcp.core import (
     DEFAULT_CONFIG_PATH,
     MCPConfigManager,
@@ -15,6 +16,7 @@ from agymcp.core import (
     parse_headers_text,
     probe_mcp_url,
 )
+from agymcp.updater import apply_update, check_for_updates
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -97,6 +99,24 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="URL",
         help="Testa la raggiungibilità HTTP di un endpoint MCP",
     )
+
+    updates = parser.add_argument_group("aggiornamenti")
+    updates.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    updates.add_argument(
+        "--check-update",
+        action="store_true",
+        help="Controlla se è disponibile una nuova release di agymcp su GitHub",
+    )
+    updates.add_argument(
+        "--update",
+        action="store_true",
+        help="Scarica e installa automaticamente l'ultima release di agymcp",
+    )
     return parser
 
 
@@ -141,12 +161,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         and not args.disable
         and not args.remove
         and not args.test
+        and not args.check_update
+        and not args.update
     ):
         from agymcp.gui import launch_gui
 
         return launch_gui(manager=manager, initial_url=args.url or "")
 
     try:
+        if args.check_update:
+            info = check_for_updates()
+            if info.error:
+                print(info.error, file=sys.stderr)
+                return 1
+            if info.update_available:
+                print(
+                    f"Nuova versione disponibile: v{info.latest_version} "
+                    f"(attuale: v{info.current_version})"
+                )
+                if info.release_url:
+                    print(f"Release: {info.release_url}")
+                print("Esegui 'agymcp --update' per aggiornare automaticamente.")
+            else:
+                print(f"agymcp v{info.current_version} è già aggiornato.")
+            return 0
+
+        if args.update:
+            info = check_for_updates()
+            if info.error:
+                print(info.error, file=sys.stderr)
+                return 1
+            result = apply_update(info)
+            print(result.message)
+            return 0 if result.success else 1
+
         if args.list:
             return _print_servers(manager)
 

@@ -50,7 +50,26 @@ agymcp --disable streak
 agymcp --enable streak
 agymcp --remove streak
 agymcp --test https://api.streak.com/mcp
+
+# Aggiornamenti automatici
+agymcp --version
+agymcp --check-update
+agymcp --update
 ```
+
+## Aggiornamento Automatico & GitHub Actions (Versionamento a 3 Fasi)
+
+L'app controlla automaticamente l'ultima release su `Loriek-cyber/agymcp` all'avvio della GUI (con toggle **Auto-aggiorna** attivo di default) e può scaricare + installare ogni nuova versione automaticamente.
+
+Il workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) esegue test, compilazione (`wheel`, `sdist` e bundle `agymcp-vX.Y.Z.tar.gz`) e pubblicazione della GitHub Release in base al prefisso del commit su `main`:
+
+| Fase | Prefisso Commit | Incremento Versione | Esempio |
+| :--- | :--- | :--- | :--- |
+| **1 — Patch** | `[patch]` oppure `[fix]` / `fix:` | `X.Y.(Z+1)` | `0.1.0` → `0.1.1` |
+| **2 — Minor** | `[minor]` oppure `[feat]` / `feat:` | `X.(Y+1).0` | `0.1.1` → `0.2.0` |
+| **3 — Major** | `[major]` oppure `[breaking]` / `feat!:` | `(X+1).0.0` | `0.2.0` → `1.0.0` |
+
+Per saltare il rilascio su un commit, non usare prefissi di rilascio oppure includi `[no-release]` / `[skip ci]`.
 
 ## Test
 

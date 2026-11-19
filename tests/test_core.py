@@ -211,7 +211,7 @@ class TestCLIAndOffscreenGUI(unittest.TestCase):
 
         app = QApplication.instance() or QApplication([])
         manager = MCPConfigManager(self.cfg_path)
-        window = MainWindow(manager=manager)
+        window = MainWindow(manager=manager, check_updates_on_start=False)
 
         window.url_input.setText("https://example.com/sse")
         self.assertTrue(window.bridge_checkbox.isChecked())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -36,6 +37,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from agymcp import __version__
 from agymcp.core import (
     MCPConfigManager,
     infer_server_name,
@@ -45,6 +47,36 @@ from agymcp.core import (
     parse_headers_text,
     probe_mcp_url,
 )
+from agymcp.updater import (
+    UpdateInfo,
+    UpdateResult,
+    apply_update,
+    check_for_updates,
+    load_settings,
+    save_settings,
+)
+
+
+class UpdateCheckWorker(QThread):
+    """Background thread to check GitHub Releases for a newer agymcp version."""
+
+    finished_check = pyqtSignal(object)
+
+    def run(self) -> None:
+        self.finished_check.emit(check_for_updates())
+
+
+class UpdateInstallWorker(QThread):
+    """Background thread to download and install an available agymcp release."""
+
+    finished_install = pyqtSignal(object)
+
+    def __init__(self, info: UpdateInfo, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.info = info
+
+    def run(self) -> None:
+        self.finished_install.emit(apply_update(self.info))
 
 
 class ProbeWorker(QThread):
@@ -295,14 +327,19 @@ class MainWindow(QMainWindow):
         self,
         manager: MCPConfigManager | None = None,
         initial_url: str = "",
+        check_updates_on_start: bool = True,
     ) -> None:
         super().__init__()
         self.manager = manager or MCPConfigManager()
         self._name_manually_edited = False
         self._probe_worker: ProbeWorker | None = None
+        self._update_check_worker: UpdateCheckWorker | None = None
+        self._update_install_worker: UpdateInstallWorker | None = None
+        self._pending_update: UpdateInfo | None = None
+        self._settings = load_settings()
 
-        self.setWindowTitle("Antigravity MCP Installer — agymcp")
-        self.setMinimumSize(820, 620)
+        self.setWindowTitle(f"Antigravity MCP Installer — agymcp v{__version__}")
+        self.setMinimumSize(820, 640)
         icon_path = Path(__file__).resolve().parent.parent / "assets" / "agymcp.svg"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
@@ -313,13 +350,46 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(16, 16, 16, 16)
         root_layout.setSpacing(12)
 
-        # Header
-        title_label = QLabel("Antigravity MCP Installer")
+        # Header with version & update controls
+        header_row = QHBoxLayout()
+        title_label = QLabel(f"Antigravity MCP Installer  (v{__version__})")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        root_layout.addWidget(title_label)
+        header_row.addWidget(title_label)
+        header_row.addStretch(1)
+
+        self.auto_update_checkbox = QCheckBox("Auto-aggiorna")
+        self.auto_update_checkbox.setChecked(bool(self._settings.get("auto_update", True)))
+        self.auto_update_checkbox.setToolTip(
+            "Se attivo, scarica e installa automaticamente ogni nuova release di agymcp all'avvio."
+        )
+        self.check_update_btn = QPushButton("Controlla aggiornamenti")
+        header_row.addWidget(self.auto_update_checkbox)
+        header_row.addWidget(self.check_update_btn)
+        root_layout.addLayout(header_row)
+
+        # Collapsible Update Banner (visible when an update is detected/installing/installed)
+        self.update_banner = QFrame()
+        self.update_banner.setFrameShape(QFrame.Shape.StyledPanel)
+        self.update_banner.setStyleSheet(
+            "QFrame { background-color: #1e3a8a; border-radius: 6px; padding: 6px; }"
+            "QLabel { color: #f8fafc; font-weight: 500; }"
+        )
+        self.update_banner.setVisible(False)
+        banner_layout = QHBoxLayout(self.update_banner)
+        banner_layout.setContentsMargins(10, 6, 10, 6)
+        self.update_banner_label = QLabel("")
+        self.update_banner_label.setWordWrap(True)
+        self.update_now_btn = QPushButton("Aggiorna ora")
+        self.update_now_btn.setVisible(False)
+        self.restart_app_btn = QPushButton("Riavvia agymcp")
+        self.restart_app_btn.setVisible(False)
+        banner_layout.addWidget(self.update_banner_label, stretch=1)
+        banner_layout.addWidget(self.update_now_btn)
+        banner_layout.addWidget(self.restart_app_btn)
+        root_layout.addWidget(self.update_banner)
 
         subtitle_label = QLabel(
             "Incolla il link di un server MCP remoto (es. https://api.streak.com/mcp) "
@@ -527,10 +597,16 @@ class MainWindow(QMainWindow):
         self.format_raw_btn.clicked.connect(self._format_raw_json)
         self.reload_raw_btn.clicked.connect(self.refresh_all)
         self.restore_bak_btn.clicked.connect(self._restore_backup)
+        self.auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
+        self.check_update_btn.clicked.connect(lambda: self._start_update_check(manual=True))
+        self.update_now_btn.clicked.connect(self._start_update_install)
+        self.restart_app_btn.clicked.connect(self._restart_application)
 
         self.refresh_all()
         if initial_url:
             self.url_input.setText(initial_url)
+        if check_updates_on_start:
+            self._start_update_check(manual=False)
 
     def _set_status(self, text: str, kind: str = "info") -> None:
         colors = {
@@ -821,6 +897,90 @@ class MainWindow(QMainWindow):
                 self._set_status("Configurazione ripristinata dal backup (.bak).", "ok")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Errore ripristino", str(exc))
+
+    def _on_auto_update_toggled(self, enabled: bool) -> None:
+        self._settings["auto_update"] = bool(enabled)
+        save_settings(self._settings)
+
+    def _start_update_check(self, manual: bool = False) -> None:
+        if self._update_check_worker is not None and self._update_check_worker.isRunning():
+            return
+        self._manual_update_check = manual
+        self.check_update_btn.setEnabled(False)
+        if manual:
+            self._set_status("Controllo nuove versioni su GitHub in corso...", "info")
+        self._update_check_worker = UpdateCheckWorker(parent=self)
+        self._update_check_worker.finished_check.connect(self._on_update_check_finished)
+        self._update_check_worker.start()
+
+    def _on_update_check_finished(self, info: UpdateInfo) -> None:
+        self.check_update_btn.setEnabled(True)
+        if info.error:
+            if self._manual_update_check:
+                self._set_status(info.error, "warn")
+            return
+
+        if not info.update_available:
+            if self._manual_update_check:
+                self._set_status(
+                    f"agymcp v{info.current_version} è già aggiornato all'ultima versione.",
+                    "ok",
+                )
+            return
+
+        self._pending_update = info
+        self.update_banner.setVisible(True)
+        self.restart_app_btn.setVisible(False)
+        if self.auto_update_checkbox.isChecked():
+            self.update_now_btn.setVisible(False)
+            self.update_banner_label.setText(
+                f"Nuova versione v{info.latest_version} rilevata! "
+                "Download e installazione automatica in corso..."
+            )
+            self._start_update_install()
+        else:
+            self.update_now_btn.setVisible(True)
+            self.update_banner_label.setText(
+                f"Nuova versione v{info.latest_version} disponibile "
+                f"(attuale: v{info.current_version})."
+            )
+
+    def _start_update_install(self) -> None:
+        if self._pending_update is None:
+            return
+        if self._update_install_worker is not None and self._update_install_worker.isRunning():
+            return
+        self.update_now_btn.setEnabled(False)
+        self.update_banner_label.setText(
+            f"Installazione aggiornamento v{self._pending_update.latest_version} in corso..."
+        )
+        self._update_install_worker = UpdateInstallWorker(
+            self._pending_update, parent=self
+        )
+        self._update_install_worker.finished_install.connect(
+            self._on_update_install_finished
+        )
+        self._update_install_worker.start()
+
+    def _on_update_install_finished(self, result: UpdateResult) -> None:
+        self.update_now_btn.setEnabled(True)
+        if result.success:
+            self.update_now_btn.setVisible(False)
+            self.restart_app_btn.setVisible(result.restart_required)
+            self.update_banner_label.setText(
+                f"{result.message} Clicca 'Riavvia agymcp' per usare subito la v{result.new_version}."
+            )
+            self._set_status(result.message, "ok")
+        else:
+            self.update_now_btn.setVisible(True)
+            self.update_banner_label.setText(result.message)
+            self._set_status(result.message, "err")
+
+    def _restart_application(self) -> None:
+        launcher = Path.home() / ".local" / "bin" / "agymcp"
+        if launcher.exists() and os.access(launcher, os.X_OK):
+            os.execv(str(launcher), [str(launcher)])
+        os.execv(sys.executable, [sys.executable, "-m", "agymcp.cli"])
 
 
 def launch_gui(
